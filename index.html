@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Melhor que do Edir 🏆🏆 - PHONK EDITION</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
+    <style>
+        body { margin: 0; background: #000; overflow: hidden; touch-action: none; }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+<script>
+const config = {
+    type: Phaser.AUTO,
+    width: Math.max(window.innerWidth, window.innerHeight),
+    height: Math.min(window.innerWidth, window.innerHeight),
+    backgroundColor: '#1e3d1a',
+    scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.CENTER_BOTH },
+    physics: { default: 'arcade', arcade: { gravity: { y: 0 } } },
+    scene: { preload: preload, create: create, update: update }
+};
+
+const game = new Phaser.Game(config);
+let player, bullets, enemyBullets, enemies, maze, particleManager, smokeManager, healthPowerup;
+let score = 0, health = 6, scoreText, healthText, ultBtn, ultText;
+let joyBase, joyThumb, joyActivePointer = null, joyVector = new Phaser.Math.Vector2(0, 0);
+let fireBtn, isInvulnerable = false, lastFired = 0;
+let isUltActive = false, ultAvailable = false;
+const MAX_ENEMIES = 3;
+
+function preload() {
+    // --- CARREGAMENTO DOS SONS ---
+    this.load.audio('musica_fundo', 'https://files.catbox.moe/7qhskm.mp3');
+    this.load.audio('som_tiro', 'https://labs.phaser.io/assets/audio/SoundEffects/blaster.mp3');
+    this.load.audio('som_explosao', 'https://labs.phaser.io/assets/audio/SoundEffects/explosion.mp3');
+}
+
+function create() {
+    this.input.addPointer(4);
+    const g = this.make.graphics({x: 0, y: 0, add: false});
+
+    // --- CONFIGURAÇÃO DA MÚSICA PHONK ---
+    let bgm = this.sound.add('musica_fundo', { volume: 0.4, loop: true });
+    
+    // Destrava o áudio no primeiro clique do jogador
+    this.input.once('pointerdown', () => {
+        if (!bgm.isPlaying) bgm.play();
+    });
+
+    // --- TEXTURAS (Seu código original) ---
+    g.fillStyle(0x0a1a05).fillRect(0, 0, 40, 40);
+    g.fillStyle(0x2d5a27).fillCircle(20, 18, 18);
+    g.generateTexture('wall', 40, 40); g.clear();
+    g.fillStyle(0xe74c3c).fillRect(6, 8, 20, 16).fillStyle(0xffffff).fillRect(14, 0, 4, 14);
+    g.generateTexture('tank_p', 32, 32); g.clear();
+    const drawEnemy = (color) => { g.fillStyle(color).fillRect(6, 8, 20, 16).fillStyle(0x000000).fillRect(14, 0, 4, 14); };
+    drawEnemy(0x34495e); g.generateTexture('tank_e1', 32, 32); g.clear();
+    drawEnemy(0x8e44ad); g.generateTexture('tank_e2', 32, 32); g.clear();
+    drawEnemy(0xf1c40f); g.generateTexture('tank_e3', 32, 32); g.clear();
+    g.fillStyle(0xffff00).fillCircle(3, 3, 3); g.generateTexture('bullet_p', 6, 6); g.clear();
+    g.fillStyle(0x00ffff).fillCircle(3, 3, 3); g.generateTexture('bullet_ult', 6, 6); g.clear();
+    g.fillStyle(0xffa500).fillCircle(3, 3, 3); g.generateTexture('bullet_e', 6, 6); g.clear();
+    g.fillStyle(0xffffff).fillRect(0, 0, 2, 2); g.generateTexture('flare', 2, 2); g.clear();
+    g.fillStyle(0xaaaaaa).fillCircle(4, 4, 4); g.generateTexture('smoke', 8, 8); g.clear();
+    g.fillStyle(0xff0000).fillCircle(10, 10, 10).fillStyle(0xffffff).fillRect(8, 4, 4, 12).fillRect(4, 8, 12, 4);
+    g.generateTexture('heart', 20, 20);
+
+    // --- LABIRINTO ---
+    maze = this.physics.add.staticGroup();
+    const w = this.scale.width, h = this.scale.height;
+    const cols = Math.floor(w / 40), rows = Math.floor(h / 40);
+    for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+            if (y === 0 || y === rows - 1 || x === 0 || x === cols - 1 || (x % 2 === 0 && y % 2 === 0 && Math.random() > 0.4)) {
+                maze.create(x * 40 + 20, y * 40 + 20, 'wall');
+            }
+        }
+    }
+
+    particleManager = this.add.particles(0, 0, 'flare', { speed: 100, scale: { start: 1, end: 0 }, lifespan: 400, blendMode: 'ADD', emitting: false });
+    smokeManager = this.add.particles(0, 0, 'smoke', { speed: { min: 20, max: 60 }, scale: { start: 1.0, end: 3.5 }, alpha: { start: 0.7, end: 0 }, lifespan: { min: 500, max: 1000 }, emitting: false });
+
+    player = this.physics.add.sprite(60, 60, 'tank_p').setCollideWorldBounds(true).setDrag(0.9);
+    bullets = this.physics.add.group();
+    enemyBullets = this.physics.add.group();
+    enemies = this.physics.add.group();
+    healthPowerup = this.physics.add.sprite(-100, -100, 'heart').setVisible(false);
+
+    // --- UI ---
+    scoreText = this.add.text(20, 20, 'Score: 0', { fontSize: '20px', fill: '#fff' }).setDepth(200);
+    healthText = this.add.text(20, 45, 'HP: ❤️❤️❤️', { fontSize: '20px', fill: '#fff' }).setDepth(200);
+    joyBase = this.add.circle(0, 0, 55, 0x000000, 0.4).setVisible(false).setDepth(200);
+    joyThumb = this.add.circle(0, 0, 30, 0xffffff, 0.6).setVisible(false).setDepth(201);
+
+    const btnX = w - 100, btnY = h - 100;
+    fireBtn = this.add.circle(btnX, btnY, 50, 0xff0000, 0.5).setInteractive().setDepth(200);
+    this.add.text(btnX, btnY, 'FOGO BB', { fontSize: '16px', fontStyle: 'bold', fill: '#fff' }).setOrigin(0.5).setDepth(201);
+    ultBtn = this.add.circle(btnX - 120, btnY, 40, 0x00aaff, 0.5).setInteractive().setDepth(200).setVisible(false);
+    ultText = this.add.text(btnX - 120, btnY, 'AURA+99', { fontSize: '12px', fontStyle: 'bold', fill: '#fff' }).setOrigin(0.5).setDepth(201).setVisible(false);
+
+    ultBtn.on('pointerdown', activateUltimate, this);
+    fireBtn.on('pointerdown', () => { if (player.active && player.visible) { fireBtn.setAlpha(1); firePlayerBullet.call(this); } });
+    fireBtn.on('pointerup', () => fireBtn.setAlpha(0.5));
+
+    this.input.on('pointerdown', (p) => { if (p.x < w / 2) { joyActivePointer = p; joyBase.setPosition(p.x, p.y).setVisible(true); joyThumb.setPosition(p.x, p.y).setVisible(true); } });
+    this.input.on('pointermove', (p) => { if (p === joyActivePointer) { let a = Phaser.Math.Angle.Between(joyBase.x, joyBase.y, p.x, p.y); let d = Math.min(Phaser.Math.Distance.Between(joyBase.x, joyBase.y, p.x, p.y), 55); joyThumb.setPosition(joyBase.x + Math.cos(a) * d, joyBase.y + Math.sin(a) * d); joyVector.set(Math.cos(a) * (d/55), Math.sin(a) * (d/55)); } });
+    this.input.on('pointerup', (p) => { if (p === joyActivePointer) { joyActivePointer = null; joyBase.setVisible(false); joyThumb.setVisible(false); joyVector.set(0, 0); } });
+
+    this.physics.add.collider([player, enemies], maze);
+    this.physics.add.collider(enemyBullets, maze, (b) => b.destroy());
+    
+    this.physics.add.collider(bullets, maze, (b) => {
+        if (!isUltActive) b.destroy(); 
+    }, (b) => !isUltActive); 
+
+    this.physics.add.overlap(bullets, enemies, (b, e) => { 
+        // SOM DE EXPLOSÃO E TREMIDINHA
+        this.sound.play('som_explosao', { volume: 0.6 });
+        this.cameras.main.shake(200, 0.03);
+
+        particleManager.emitParticleAt(e.x, e.y, 25); b.destroy(); e.destroy(); 
+        score += 10; scoreText.setText('Score: ' + score);
+        checkUltStatus(); 
+        this.time.delayedCall(3500, () => spawnEnemy.call(this)); 
+    });
+
+    this.physics.add.overlap(enemyBullets, player, (p, b) => { if (!isInvulnerable) { b.destroy(); takeDamage.call(this); } });
+    this.physics.add.overlap(player, healthPowerup, () => {
+        if (healthPowerup.visible) {
+            if (health < 3) health++;
+            healthText.setText('HP: ' + '❤️'.repeat(Math.max(0, health)));
+            healthPowerup.setVisible(false).setPosition(-100, -100);
+            this.time.delayedCall(6000, spawnHeart, [], this);
+        }
+    });
+
+    for(let i=0; i < MAX_ENEMIES; i++) spawnEnemy.call(this);
+    this.time.delayedCall(6000, spawnHeart, [], this);
+}
+
+function spawnHeart() {
+    if (healthPowerup.visible) return;
+    let x = Phaser.Math.Between(100, this.scale.width - 100), y = Phaser.Math.Between(100, this.scale.height - 100);
+    if (this.physics.overlap(maze, {x, y})) return spawnHeart.call(this);
+    healthPowerup.setPosition(x, y).setVisible(true);
+}
+
+function checkUltStatus() {
+    if (score >= 100 && !ultAvailable && !isUltActive) {
+        ultAvailable = true; ultBtn.setVisible(true).setAlpha(1); ultText.setVisible(true).setText('AURA+99!');
+    }
+}
+
+function activateUltimate() {
+    if (!ultAvailable) return;
+    ultAvailable = false; isUltActive = true; ultBtn.setAlpha(0.3);
+    let timeLeft = 7;
+    const timer = this.time.addEvent({ delay: 1000, repeat: 7, callback: () => {
+        ultText.setText(timeLeft + 's');
+        if (timeLeft <= 0) { 
+            isUltActive = false; ultBtn.setVisible(false); ultText.setVisible(false); score = 0; scoreText.setText('Score: ' + score); 
+            timer.remove();
+        }
+        timeLeft--;
+    }});
+}
+
+function update() {
+    if (!player.active || !player.visible) return;
+    player.setVelocity(joyVector.x * 210, joyVector.y * 210);
+    if (joyVector.lengthSq() > 0) player.setRotation(joyVector.angle() + Math.PI/2);
+    enemies.children.iterate(e => {
+        if (e && e.active) {
+            let distance = Phaser.Math.Distance.Between(e.x, e.y, player.x, player.y);
+            let angleToPlayer = Phaser.Math.Angle.Between(e.x, e.y, player.x, player.y);
+            let speed = e.eliteLevel === 3 ? 140 : (e.eliteLevel === 2 ? 110 : 80);
+            if (distance > 200) this.physics.velocityFromRotation(angleToPlayer, speed, e.body.velocity);
+            else {
+                let sideVelocity = new Phaser.Math.Vector2();
+                this.physics.velocityFromRotation(angleToPlayer + Math.PI/2, speed, sideVelocity);
+                e.setVelocity(sideVelocity.x, sideVelocity.y);
+            }
+            e.setRotation(angleToPlayer + Math.PI/2);
+            if (this.time.now > (e.lastFired || 0)) {
+                fireEnemyBullet.call(this, e);
+                let fireRate = e.eliteLevel === 3 ? 800 : (e.eliteLevel === 2 ? 1400 : 2200);
+                e.lastFired = this.time.now + fireRate;
+            }
+        }
+    });
+}
+
+function firePlayerBullet() {
+    if (this.time.now < lastFired) return;
+    lastFired = this.time.now + 90;
+
+    // SOM DE TIRO
+    this.sound.play('som_tiro', { volume: 0.4 });
+
+    const texture = isUltActive ? 'bullet_ult' : 'bullet_p';
+    let b = bullets.create(player.x, player.y, texture);
+    if (b) {
+        let angle = player.rotation - Math.PI/2;
+        this.physics.velocityFromRotation(angle, 550, b.body.velocity);
+        let smokeTint = isUltActive ? 0x00ffff : 0xaaaaaa;
+        smokeManager.emitParticleAt(player.x, player.y, 25, { speed: { min: 40, max: 120 }, scale: { start: 1.5, end: 4.5 }, tint: smokeTint, alpha: { start: 0.8, end: 0 } }); 
+        this.time.delayedCall(isUltActive ? 3000 : 1200, () => { if(b && b.active) b.destroy(); });
+    }
+}
+
+function fireEnemyBullet(enemy) {
+    if (!player.visible) return;
+    let b = enemyBullets.create(enemy.x, enemy.y, 'bullet_e');
+    if (b) { let a = Phaser.Math.Angle.Between(enemy.x, enemy.y, player.x, player.y); this.physics.velocityFromRotation(a, 280, b.body.velocity); this.time.delayedCall(2000, () => { if(b && b.active) b.destroy(); }); }
+}
+
+function takeDamage() {
+    health--;
+    healthText.setText('HP: ' + '❤️'.repeat(Math.max(0, health)));
+    particleManager.emitParticleAt(player.x, player.y, 25);
+    
+    // TREMIDA DE TELA QUANDO TOMA DANO
+    this.cameras.main.shake(300, 0.05);
+
+    if (health <= 0) {
+        player.setVisible(false);
+        this.add.text(this.scale.width/2, this.scale.height/2, 'MT RUIMLIXO!', { fontSize: '40px', fill: '#f00', fontStyle: 'bold' }).setOrigin(0.5);
+        this.time.delayedCall(2000, () => location.reload());
+    } else {
+        isInvulnerable = true; player.setAlpha(0.5); player.setPosition(60, 60);
+        this.time.delayedCall(1500, () => { isInvulnerable = false; player.setAlpha(1); });
+    }
+}
+
+function spawnEnemy() {
+    if (enemies.countActive() >= MAX_ENEMIES) return;
+    let x = Phaser.Math.Between(100, this.scale.width - 100), y = Phaser.Math.Between(100, this.scale.height - 100);
+    if (this.physics.overlap(maze, {x, y}) || Phaser.Math.Distance.Between(x, y, player.x, player.y) < 250) return spawnEnemy.call(this);
+    let level = 1, texture = 'tank_e1';
+    if (score > 300) { level = 3; texture = 'tank_e3'; } else if (score > 100) { level = 2; texture = 'tank_e2'; }
+    let enemy = enemies.create(x, y, texture);
+    enemy.eliteLevel = level;
+    enemy.setBounce(0.5).setCollideWorldBounds(true);
+}
+</script>
+</body>
+</html>
