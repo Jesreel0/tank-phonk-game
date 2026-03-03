@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>TANK PHONK - PIXEL EDITION 🕹️</title>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
+    <style>
+        body { margin: 0; background: #000; overflow: hidden; touch-action: none; }
+        canvas { display: block; image-rendering: pixelated; image-rendering: crisp-edges; }
+    </style>
+</head>
+<body>
+<script>
+let difficulty = 'Medio';
+let highScore = parseInt(localStorage.getItem('tankHighScore') || 0);
+
+// ── Utilitário de pixel art ──────────────────────────────────────────────────
+// Desenha um sprite a partir de uma grade de índices de cor
+// colorMap: { index: 0xHEXCOR }  |  0 = transparente
+function drawPixelSprite(g, pixelMap, colorMap, ps, ox, oy) {
+    pixelMap.forEach((row, ry) => {
+        row.forEach((c, rx) => {
+            if (c === 0) return;
+            g.fillStyle(colorMap[c], 1);
+            g.fillRect(ox + rx * ps, oy + ry * ps, ps, ps);
+        });
+    });
+}
+
+// ── Sprites pixel art dos tanques ───────────────────────────────────────────
+// 8x8 células, cada célula = 4px → sprite 32x32
+
+const TANK_PLAYER = [
+    [0,0,1,2,2,1,0,0],
+    [0,1,2,3,3,2,1,0],
+    [0,4,2,3,3,2,4,0],
+    [1,2,2,2,2,2,2,1],
+    [1,2,5,2,2,5,2,1],
+    [1,2,2,2,2,2,2,1],
+    [0,1,2,2,2,2,1,0],
+    [0,0,1,1,1,1,0,0],
+];
+const TANK_P_COLORS = { 1:0x1a3a1a, 2:0x2d6e2d, 3:0x4caf50, 4:0x8bc34a, 5:0xff5252 };
+
+const TANK_E1 = [
+    [0,0,1,2,2,1,0,0],
+    [0,1,2,3,3,2,1,0],
+    [0,4,2,3,3,2,4,0],
+    [1,2,2,2,2,2,2,1],
+    [1,2,5,2,2,5,2,1],
+    [1,2,2,2,2,2,2,1],
+    [0,1,2,2,2,2,1,0],
+    [0,0,1,1,1,1,0,0],
+];
+const TANK_E1_COLORS = { 1:0x0a0a1a, 2:0x1a1a3a, 3:0x3a3a6e, 4:0x5a5a9e, 5:0xffa726 };
+
+const TANK_E2_COLORS = { 1:0x1a0020, 2:0x4a0060, 3:0x8000aa, 4:0xbb44dd, 5:0xffee58 };
+const TANK_E3_COLORS = { 1:0x1a1000, 2:0x4a3000, 3:0xb8860b, 4:0xffd700, 5:0xff6b6b };
+
+// Sprite de parede 10x10 px pixel
+const WALL_MAP = [
+    [1,1,1,1,1,1,1,1,1,1],
+    [1,2,2,2,3,3,2,2,2,1],
+    [1,2,3,2,2,2,2,3,2,1],
+    [1,2,2,2,2,2,2,2,2,1],
+    [1,3,2,2,2,2,2,2,3,1],
+    [1,2,2,2,2,2,2,2,2,1],
+    [1,2,3,2,2,2,2,3,2,1],
+    [1,2,2,2,3,3,2,2,2,1],
+    [1,2,2,2,2,2,2,2,2,1],
+    [1,1,1,1,1,1,1,1,1,1],
+];
+const WALL_COLORS = { 1:0x1a3a0a, 2:0x2d5a1a, 3:0x4a7a2a };
+
+// Coração pixel 8x8
+const HEART_MAP = [
+    [0,1,1,0,0,1,1,0],
+    [1,2,2,1,1,2,2,1],
+    [1,2,2,2,2,2,2,1],
+    [1,2,2,2,2,2,2,1],
+    [0,1,2,2,2,2,1,0],
+    [0,0,1,2,2,1,0,0],
+    [0,0,0,1,1,0,0,0],
+    [0,0,0,0,0,0,0,0],
+];
+const HEART_COLORS = { 1:0x880000, 2:0xff4444 };
+
+class MenuScene extends Phaser.Scene {
+    constructor() { super('MenuScene'); }
+
+    preload() {
+        this.load.audio('musica_fundo', 'https://files.catbox.moe/7qhskm.mp3');
+    }
+
+    create() {
+        const w = this.scale.width, h = this.scale.height;
+        const g = this.make.graphics({x:0,y:0,add:false});
+
+        // ── Fundo sólido escuro estilo pixel art ─────────────────────────
+        g.fillStyle(0x050d05).fillRect(0, 0, w, h);
+        g.generateTexture('bg_solid', w, h); g.clear();
+        this.add.image(0, 0, 'bg_solid').setOrigin(0);
+
+        // Grid pixel art 16x16
+        g.lineStyle(1, 0x0a1f0a, 1);
+        for (let x = 0; x < w; x += 16) { g.moveTo(x,0); g.lineTo(x,h); }
+        for (let y = 0; y < h; y += 16) { g.moveTo(0,y); g.lineTo(w,y); }
+        g.strokePath();
+        g.generateTexture('grid_px', w, h); g.clear();
+        this.add.image(0, 0, 'grid_px').setOrigin(0);
+
+        // ── Scanlines (efeito CRT) ────────────────────────────────────────
+        for (let y = 0; y < h; y += 4) {
+            g.fillStyle(0x000000, 0.18).fillRect(0, y, w, 2);
+        }
+        g.generateTexture('scanlines', w, h); g.clear();
+        this.add.image(0, 0, 'scanlines').setOrigin(0).setDepth(50);
+
+        // ── Partículas quadradas (pixel sparks) ───────────────────────────
+        g.fillStyle(0xffffff).fillRect(0,0,4,4); g.generateTexture('star',4,4); g.clear();
+        g.fillStyle(0x00ff44).fillRect(0,0,6,6); g.generateTexture('spark',6,6); g.clear();
+
+        this.add.particles(0, 0, 'star', {
+            x: { min: 0, max: w }, y: { min: 0, max: h },
+            speedY: { min: -10, max: -35 }, speedX: { min: -5, max: 5 },
+            scale: { start: 1, end: 0 }, alpha: { start: 0.6, end: 0 },
+            lifespan: { min: 2000, max: 4500 }, quantity: 1, frequency: 80,
+            tint: [0x00ff00, 0x00ff88, 0xffffff, 0xffff00]
+        });
+
+        // ── Borda pixel art do painel ──────────────────────────────────────
+        const panelW = Math.min(w * 0.82, 420), panelH = h * 0.78;
+        const panelX = w/2 - panelW/2, panelY = h * 0.11;
+        const px = 4; // tamanho do pixel da borda
+
+        // Fundo do painel
+        g.fillStyle(0x000000, 0.75).fillRect(0, 0, panelW, panelH);
+        // Borda pixelada (sem arredondamento)
+        g.lineStyle(px, 0x00ff44, 1).strokeRect(0, 0, panelW, panelH);
+        // Borda interna mais escura
+        g.lineStyle(px, 0x004422, 1).strokeRect(px, px, panelW - px*2, panelH - px*2);
+        g.generateTexture('panel', panelW, panelH); g.clear();
+        this.add.image(panelX, panelY, 'panel').setOrigin(0).setDepth(1);
+
+        // Cantos decorativos pixel art
+        const cSz = 16;
+        [[panelX, panelY],[panelX+panelW-cSz, panelY],
+         [panelX, panelY+panelH-cSz],[panelX+panelW-cSz, panelY+panelH-cSz]].forEach(([cx, cy]) => {
+            g.fillStyle(0x00ff88).fillRect(0,0,cSz,4).fillRect(0,0,4,cSz);
+            g.generateTexture('corner_'+cx+'_'+cy, cSz, cSz); g.clear();
+            this.add.image(cx, cy, 'corner_'+cx+'_'+cy).setOrigin(0).setDepth(3);
+        });
+
+        // ── Título TANK PHONK em pixel art ────────────────────────────────
+        // Sombra dura (offset, sem suavização)
+        this.add.text(w/2 + 4, h * 0.175 + 4, 'TANK PHONK', {
+            fontFamily: '"Press Start 2P"',
+            fontSize: Math.min(28, w * 0.055) + 'px',
+            fill: '#003300'
+        }).setOrigin(0.5).setDepth(2);
+
+        const titleText = this.add.text(w/2, h * 0.175, 'TANK PHONK', {
+            fontFamily: '"Press Start 2P"',
+            fontSize: Math.min(28, w * 0.055) + 'px',
+            fill: '#00ff44'
+        }).setOrigin(0.5).setDepth(3);
+
+        // Piscar do título (pixel style)
+        this.tweens.add({ targets: titleText, alpha: 0.7, duration: 500, yoyo: true, repeat: -1, ease: 'Stepped' });
+
+        // Subtítulo
+        this.add.text(w/2, h * 0.27, '>  MELHOR QUE DO EDIR  <', {
+            fontFamily: '"Press Start 2P"', fontSize: '8px', fill: '#44aa66'
+        }).setOrigin(0.5).setDepth(3);
+
+        // Linha decorativa pixel
+        g.fillStyle(0x00ff44).fillRect(0,0,panelW*0.7,2); g.generateTexture('hline', panelW*0.7, 2); g.clear();
+        this.add.image(w/2, h*0.295, 'hline').setOrigin(0.5).setDepth(2);
+
+        // ── Recorde ────────────────────────────────────────────────────────
+        const itemW = Math.min(panelW - 40, 280);
+        const recY = h * 0.365;
+        g.fillStyle(0x001100).fillRect(0,0,itemW,40);
+        g.lineStyle(2, 0xffff00, 1).strokeRect(0,0,itemW,40);
+        g.generateTexture('rec_bg', itemW, 40); g.clear();
+        this.add.image(w/2, recY, 'rec_bg').setOrigin(0.5).setDepth(2);
+        this.add.text(w/2, recY, '>> REC: ' + highScore, {
+            fontFamily: '"Press Start 2P"', fontSize: '12px', fill: '#ffff00'
+        }).setOrigin(0.5).setDepth(3);
+
+        // ── Botão JOGAR (pixel art, sem arredondamento) ───────────────────
+        const playY = h * 0.475;
+        const playBtnH = 48;
+
+        // Normal
+        g.fillStyle(0x004400).fillRect(0,4,itemW,playBtnH);  // sombra
+        g.fillStyle(0x007700).fillRect(0,0,itemW,playBtnH);  // corpo
+        g.fillStyle(0x00aa44, 0.5).fillRect(0,0,itemW,playBtnH/2);  // reflexo
+        g.lineStyle(2, 0x00ff88, 1).strokeRect(0,0,itemW,playBtnH);
+        g.generateTexture('btn_play', itemW, playBtnH+4); g.clear();
+
+        // Hover
+        g.fillStyle(0x009900).fillRect(0,0,itemW,playBtnH);
+        g.fillStyle(0xffffff,0.15).fillRect(0,0,itemW,playBtnH/2);
+        g.lineStyle(2, 0xffffff, 1).strokeRect(0,0,itemW,playBtnH);
+        g.generateTexture('btn_play_hover', itemW, playBtnH); g.clear();
+
+        const playImg = this.add.image(w/2, playY, 'btn_play').setOrigin(0.5).setDepth(2).setInteractive();
+        const playText = this.add.text(w/2, playY, '> JOGAR <', {
+            fontFamily: '"Press Start 2P"', fontSize: '14px', fill: '#ffffff'
+        }).setOrigin(0.5).setDepth(3);
+
+        playImg.on('pointerover', () => { playImg.setTexture('btn_play_hover'); playText.setStyle({ fill: '#000' }); });
+        playImg.on('pointerout',  () => { playImg.setTexture('btn_play'); playText.setStyle({ fill: '#fff' }); });
+        playImg.on('pointerdown', () => {
+            this.cameras.main.flash(120, 0, 255, 0);
+            this.time.delayedCall(120, () => this.scene.start('GameScene'));
+        });
+
+        // ── Botão DIFICULDADE ──────────────────────────────────────────────
+        const diffY = h * 0.59;
+        const diffBtnH = 44;
+
+        g.fillStyle(0x111111).fillRect(0,0,itemW,diffBtnH);
+        g.lineStyle(2, 0x333333, 1).strokeRect(0,0,itemW,diffBtnH);
+        g.generateTexture('btn_diff', itemW, diffBtnH); g.clear();
+
+        g.fillStyle(0x1a1a1a).fillRect(0,0,itemW,diffBtnH);
+        g.lineStyle(2, 0x00ff88, 1).strokeRect(0,0,itemW,diffBtnH);
+        g.generateTexture('btn_diff_hover', itemW, diffBtnH); g.clear();
+
+        const diffImg = this.add.image(w/2, diffY, 'btn_diff').setOrigin(0.5).setDepth(2).setInteractive();
+        const diffColors = { 'Facil': '#00ff88', 'Medio': '#ffff00', 'Dificil': '#ff4444' };
+        const diffIcons  = { 'Facil': '[F]', 'Medio': '[M]', 'Dificil': '[D]' };
+        const diffText = this.add.text(w/2, diffY, '', {
+            fontFamily: '"Press Start 2P"', fontSize: '9px', fill: diffColors[difficulty]
+        }).setOrigin(0.5).setDepth(3);
+
+        const updateDiff = () => {
+            diffText.setText('DIFIC: ' + diffIcons[difficulty] + ' ' + difficulty.toUpperCase());
+            diffText.setStyle({ fill: diffColors[difficulty] });
+        };
+        updateDiff();
+
+        diffImg.on('pointerover', () => diffImg.setTexture('btn_diff_hover'));
+        diffImg.on('pointerout',  () => diffImg.setTexture('btn_diff'));
+        diffImg.on('pointerdown', () => {
+            if (difficulty === 'Facil') difficulty = 'Medio';
+            else if (difficulty === 'Medio') difficulty = 'Dificil';
+            else difficulty = 'Facil';
+            updateDiff();
+            this.tweens.add({ targets: diffText, scaleX: 1.3, scaleY: 1.3, duration: 60, yoyo: true });
+        });
+
+        // ── Instruções ──────────────────────────────────────────────────────
+        const instrY = h * 0.72;
+        g.fillStyle(0x000000, 0.5).fillRect(0,0,itemW,52);
+        g.lineStyle(2, 0x113311, 1).strokeRect(0,0,itemW,52);
+        g.generateTexture('instr_bg', itemW, 52); g.clear();
+        this.add.image(w/2, instrY, 'instr_bg').setOrigin(0.5).setDepth(2);
+        this.add.text(w/2, instrY - 12, 'JOY ESQ = MOVER', {
+            fontFamily: '"Press Start 2P"', fontSize: '8px', fill: '#5a8a5a'
+        }).setOrigin(0.5).setDepth(3);
+        this.add.text(w/2, instrY + 8, 'FOGO BB = ATIRAR', {
+            fontFamily: '"Press Start 2P"', fontSize: '8px', fill: '#5a8a5a'
+        }).setOrigin(0.5).setDepth(3);
+
+        // ── Hint piscando ─────────────────────────────────────────────────
+        const hint = this.add.text(w/2, h * 0.9, '-- TOQUE EM JOGAR --', {
+            fontFamily: '"Press Start 2P"', fontSize: '8px', fill: '#224422'
+        }).setOrigin(0.5).setDepth(3);
+        this.tweens.add({ targets: hint, alpha: 0, duration: 700, yoyo: true, repeat: -1 });
+
+        // Versão
+        this.add.text(w - 8, h - 8, 'v2.0 PX', {
+            fontFamily: '"Press Start 2P"', fontSize: '6px', fill: '#1a3a1a'
+        }).setOrigin(1, 1).setDepth(3);
+
+        // Animação entrada
+        [titleText, playImg, playText, diffImg, diffText].forEach((obj, i) => {
+            obj.setAlpha(0).setY(obj.y + 16);
+            this.tweens.add({ targets: obj, alpha: 1, y: obj.y - 16, duration: 300, delay: i * 60, ease: 'Back.easeOut' });
+        });
+    }
+}
+
+class GameScene extends Phaser.Scene {
+    constructor() { super('GameScene'); }
+
+    preload() {
+        this.load.audio('som_tiro',    'https://labs.phaser.io/assets/audio/SoundEffects/blaster.mp3');
+        this.load.audio('som_explosao','https://labs.phaser.io/assets/audio/SoundEffects/explosion.mp3');
+    }
+
+    create() {
+        score = 0; health = 6; isUltActive = false; ultAvailable = false;
+        isInvulnerable = false; lastFired = 0;
+
+        let bgm = this.sound.get('musica_fundo') || this.sound.add('musica_fundo', { volume: 0.4, loop: true });
+        if (!bgm.isPlaying) bgm.play();
+
+        this.input.addPointer(4);
+        const g = this.make.graphics({x: 0, y: 0, add: false});
+        const w = this.scale.width, h = this.scale.height;
+
+        // ── Fundo pixel art ───────────────────────────────────────────────
+        // Tiles de chão 8x8
+        const FLOOR_TILE = [
+            [1,1,1,1,1,1,1,1],
+            [1,2,1,1,1,1,1,1],
+            [1,1,1,1,1,1,2,1],
+            [1,1,1,1,1,1,1,1],
+            [1,1,1,2,1,1,1,1],
+            [1,1,1,1,1,1,1,1],
+            [1,1,1,1,1,2,1,1],
+            [1,1,1,1,1,1,1,1],
+        ];
+        const FLOOR_COLORS = { 1:0x0d1f09, 2:0x152b0d };
+        drawPixelSprite(g, FLOOR_TILE, FLOOR_COLORS, 8, 0, 0);
+        g.generateTexture('floor_tile', 64, 64); g.clear();
+
+        // Tile para fundo repetido
+        for (let ty = 0; ty < h; ty += 64) {
+            for (let tx = 0; tx < w; tx += 64) {
+                this.add.image(tx, ty, 'floor_tile').setOrigin(0).setDepth(0);
+            }
+        }
+
+        // Grid sutil
+        g.lineStyle(1, 0x0a1a06, 1);
+        for (let lx = 0; lx < w; lx += 16) { g.moveTo(lx,0); g.lineTo(lx,h); }
+        for (let ly = 0; ly < h; ly += 16) { g.moveTo(0,ly); g.lineTo(w,ly); }
+        g.strokePath(); g.generateTexture('grid_game', w, h); g.clear();
+        this.add.image(0, 0, 'grid_game').setOrigin(0).setDepth(0);
+
+        // Scanlines
+        for (let sy = 0; sy < h; sy += 4) g.fillStyle(0x000000, 0.1).fillRect(0, sy, w, 2);
+        g.generateTexture('crt', w, h); g.clear();
+        this.add.image(0, 0, 'crt').setOrigin(0).setDepth(250);
+
+        // ── Texturas pixel art ────────────────────────────────────────────
+        // Parede pixel
+        drawPixelSprite(g, WALL_MAP, WALL_COLORS, 4, 0, 0);
+        g.generateTexture('wall', 40, 40); g.clear();
+
+        // Tanque do jogador
+        drawPixelSprite(g, TANK_PLAYER, TANK_P_COLORS, 4, 0, 0);
+        g.generateTexture('tank_p', 32, 32); g.clear();
+
+        // Inimigos
+        drawPixelSprite(g, TANK_E1, TANK_E1_COLORS, 4, 0, 0);
+        g.generateTexture('tank_e1', 32, 32); g.clear();
+        drawPixelSprite(g, TANK_E1, TANK_E2_COLORS, 4, 0, 0);
+        g.generateTexture('tank_e2', 32, 32); g.clear();
+        drawPixelSprite(g, TANK_E1, TANK_E3_COLORS, 4, 0, 0);
+        g.generateTexture('tank_e3', 32, 32); g.clear();
+
+        // Balas pixel (retângulo, sem círculo)
+        g.fillStyle(0xffff00).fillRect(0,0,4,6).fillStyle(0xffffff).fillRect(1,0,2,2);
+        g.generateTexture('bullet_p', 4, 6); g.clear();
+        g.fillStyle(0x00eeff).fillRect(0,0,5,8).fillStyle(0xffffff).fillRect(1,0,3,2);
+        g.generateTexture('bullet_ult', 5, 8); g.clear();
+        g.fillStyle(0xff6600).fillRect(0,0,4,6).fillStyle(0xff9900).fillRect(1,0,2,2);
+        g.generateTexture('bullet_e', 4, 6); g.clear();
+
+        // Partícula de explosão (quadrada)
+        g.fillStyle(0xffffff).fillRect(0,0,4,4); g.generateTexture('flare',4,4); g.clear();
+        g.fillStyle(0x555555).fillRect(0,0,6,6); g.generateTexture('smoke',6,6); g.clear();
+
+        // Coração pixel art
+        drawPixelSprite(g, HEART_MAP, HEART_COLORS, 3, 0, 0);
+        g.generateTexture('heart', 24, 24); g.clear();
+
+        // Cápsula pixel art (retangular)
+        g.fillStyle(0x7a5c00).fillRect(0,0,4,10);   // base
+        g.fillStyle(0xd4a017).fillRect(0,0,3,9);    // corpo
+        g.fillStyle(0xffd700).fillRect(0,0,3,3);    // boca brilhante
+        g.fillStyle(0xf5c842).fillRect(1,3,1,4);    // reflexo
+        g.generateTexture('casing', 4, 10); g.clear();
+
+        // ── Labirinto ─────────────────────────────────────────────────────
+        maze = this.physics.add.staticGroup();
+        const cols = Math.floor(w / 40), rows = Math.floor(h / 40);
+        for (let gy = 0; gy < rows; gy++) {
+            for (let gx = 0; gx < cols; gx++) {
+                if (gy === 0 || gy === rows-1 || gx === 0 || gx === cols-1 ||
+                    (gx % 2 === 0 && gy % 2 === 0 && Math.random() > 0.4)) {
+                    maze.create(gx*40+20, gy*40+20, 'wall');
+                }
+            }
+        }
+
+        // ── Partículas ────────────────────────────────────────────────────
+        particleManager = this.add.particles(0, 0, 'flare', { speed: 80, scale: { start: 1, end: 0 }, lifespan: 350, blendMode: 'ADD', emitting: false });
+        smokeManager    = this.add.particles(0, 0, 'smoke', { speed: { min: 15, max: 50 }, scale: { start: 1, end: 2.5 }, alpha: { start: 0.7, end: 0 }, lifespan: { min: 400, max: 800 }, emitting: false });
+
+        // ── Entidades ─────────────────────────────────────────────────────
+        player        = this.physics.add.sprite(60, 60, 'tank_p').setCollideWorldBounds(true).setDrag(0.9);
+        bullets       = this.physics.add.group();
+        enemyBullets  = this.physics.add.group();
+        enemies       = this.physics.add.group();
+        healthPowerup = this.physics.add.sprite(-100, -100, 'heart').setVisible(false);
+        casingGroup   = this.add.group();
+
+        // ── HUD pixel art ─────────────────────────────────────────────────
+        // Fundo do HUD
+        g.fillStyle(0x000000, 0.75).fillRect(0, 0, 220, 65);
+        g.lineStyle(2, 0x00ff44, 1).strokeRect(0,0,220,65);
+        g.generateTexture('hud_bg', 220, 65); g.clear();
+        this.add.image(10, 10, 'hud_bg').setOrigin(0).setDepth(200);
+
+        scoreText  = this.add.text(20, 20, 'SC:0', {
+            fontFamily: '"Press Start 2P"', fontSize: '11px', fill: '#00ff44'
+        }).setDepth(201);
+        healthText = this.add.text(20, 40, 'HP:3/3', {
+            fontFamily: '"Press Start 2P"', fontSize: '11px', fill: '#ff5555'
+        }).setDepth(201);
+
+        // Badge de modo
+        this.add.text(w - 12, 12, difficulty.toUpperCase(), {
+            fontFamily: '"Press Start 2P"', fontSize: '8px', fill: '#aaffaa',
+            backgroundColor: '#001100', padding: { x: 5, y: 3 }
+        }).setOrigin(1, 0).setDepth(200);
+
+        const pauseBtn = this.add.text(w - 12, 28, 'MENU', {
+            fontFamily: '"Press Start 2P"', fontSize: '8px', fill: '#aaffaa',
+            backgroundColor: '#001100', padding: { x: 5, y: 3 }
+        }).setOrigin(1, 0).setDepth(200).setInteractive();
+        pauseBtn.on('pointerdown', () => {
+            if (score > highScore) { highScore = score; localStorage.setItem('tankHighScore', highScore); }
+            this.scene.start('MenuScene');
+        });
+
+        // ── Joystick pixel art ────────────────────────────────────────────
+        joyBase  = this.add.rectangle(0, 0, 110, 110, 0x000000, 0.3).setVisible(false).setDepth(200);
+        joyThumb = this.add.rectangle(0, 0, 48, 48, 0x00ff44, 0.5).setVisible(false).setDepth(201);
+
+        // Borda joystick
+        const joyBorderG = this.make.graphics({x:0,y:0,add:false});
+        joyBorderG.lineStyle(2, 0x00aa33, 1).strokeRect(0,0,110,110);
+        joyBorderG.generateTexture('joy_border', 110, 110); joyBorderG.destroy();
+
+        // ── Botão FOGO pixel art ──────────────────────────────────────────
+        const btnX = w - 90, btnY = h - 90;
+
+        g.fillStyle(0x880000).fillRect(0,4,90,86).fillStyle(0xff2222).fillRect(0,0,90,86);
+        g.fillStyle(0xff8888,0.3).fillRect(4,4,82,40);
+        g.lineStyle(2,0xff6666,1).strokeRect(0,0,90,86);
+        g.generateTexture('fire_btn', 90, 90); g.clear();
+
+        g.fillStyle(0xcc0000).fillRect(0,0,90,86).lineStyle(2,0xff0000,1).strokeRect(0,0,90,86);
+        g.generateTexture('fire_btn_down', 90, 86); g.clear();
+
+        fireBtn = this.add.image(btnX, btnY, 'fire_btn').setInteractive().setDepth(200);
+        this.add.text(btnX, btnY, 'FOGO\nBB', {
+            fontFamily: '"Press Start 2P"', fontSize: '10px', fill: '#fff', align: 'center'
+        }).setOrigin(0.5).setDepth(201);
+
+        ultBtn  = this.add.rectangle(btnX-130, btnY, 80, 80, 0x0044aa, 0.6).setInteractive().setDepth(200).setVisible(false);
+        ultText = this.add.text(btnX-130, btnY, 'AURA\n+99', {
+            fontFamily: '"Press Start 2P"', fontSize: '9px', fill: '#fff', align: 'center'
+        }).setOrigin(0.5).setDepth(201).setVisible(false);
+
+        // Borda ult
+        const ultBorderG = this.make.graphics({x:0,y:0,add:false});
+        ultBorderG.lineStyle(2, 0x00aaff, 1).strokeRect(0,0,80,80);
+        ultBorderG.generateTexture('ult_border', 80, 80); ultBorderG.destroy();
+
+        ultBtn.on('pointerdown', activateUltimate, this);
+        fireBtn.on('pointerdown', () => {
+            fireBtn.setTexture('fire_btn_down');
+            if (player.active && player.visible) firePlayerBullet.call(this);
+        });
+        fireBtn.on('pointerup', () => fireBtn.setTexture('fire_btn'));
+
+        this.input.on('pointerdown', (p) => {
+            if (p.x < w/2) {
+                joyActivePointer = p;
+                joyBase.setPosition(p.x, p.y).setVisible(true);
+                joyThumb.setPosition(p.x, p.y).setVisible(true);
+            }
+        });
+        this.input.on('pointermove', (p) => {
+            if (p === joyActivePointer) {
+                let a = Phaser.Math.Angle.Between(joyBase.x, joyBase.y, p.x, p.y);
+                let d = Math.min(Phaser.Math.Distance.Between(joyBase.x, joyBase.y, p.x, p.y), 55);
+                joyThumb.setPosition(joyBase.x + Math.cos(a)*d, joyBase.y + Math.sin(a)*d);
+                joyVector.set(Math.cos(a)*(d/55), Math.sin(a)*(d/55));
+            }
+        });
+        this.input.on('pointerup', (p) => {
+            if (p === joyActivePointer) {
+                joyActivePointer = null;
+                joyBase.setVisible(false); joyThumb.setVisible(false);
+                joyVector.set(0, 0);
+            }
+        });
+
+        // ── Colisões ──────────────────────────────────────────────────────
+        this.physics.add.collider([player, enemies], maze);
+        this.physics.add.collider(enemyBullets, maze, (b) => b.destroy());
+        this.physics.add.collider(bullets, maze, (b) => { if (!isUltActive) b.destroy(); }, () => !isUltActive);
+
+        this.physics.add.overlap(bullets, enemies, (b, e) => {
+            this.sound.play('som_explosao', { volume: 0.6 });
+            this.cameras.main.shake(150, 0.02);
+            particleManager.emitParticleAt(e.x, e.y, 20);
+            b.destroy(); e.destroy();
+            score += 10; scoreText.setText('SC:' + score);
+            checkUltStatus();
+            this.time.delayedCall(3500, () => spawnEnemy.call(this));
+        });
+
+        this.physics.add.overlap(enemyBullets, player, (p, b) => {
+            if (!isInvulnerable) { b.destroy(); takeDamage.call(this); }
+        });
+        this.physics.add.overlap(player, healthPowerup, () => {
+            if (healthPowerup.visible) {
+                if (health < 3) health++;
+                healthText.setText('HP:' + health + '/3');
+                healthPowerup.setVisible(false).setPosition(-100, -100);
+                this.time.delayedCall(6000, spawnHeart, [], this);
+            }
+        });
+
+        for (let i = 0; i < MAX_ENEMIES; i++) spawnEnemy.call(this);
+        this.time.delayedCall(6000, spawnHeart, [], this);
+    }
+
+    update() {
+        if (!player.active || !player.visible) return;
+        player.setVelocity(joyVector.x * 210, joyVector.y * 210);
+        if (joyVector.lengthSq() > 0) player.setRotation(joyVector.angle() + Math.PI/2);
+
+        bullets.children.iterate(b => {
+            if (b && b.active) {
+                smokeManager.emitParticleAt(b.x, b.y, 2, {
+                    tint: isUltActive ? 0x00ccff : 0x888888,
+                    scale: { start: 0.5, end: 1.5 }, alpha: { start: 0.5, end: 0 }, lifespan: 200
+                });
+            }
+        });
+
+        enemyBullets.children.iterate(b => {
+            if (b && b.active) {
+                smokeManager.emitParticleAt(b.x, b.y, 1, {
+                    tint: 0xff4400, scale: { start: 0.2, end: 0.6 }, alpha: { start: 0.25, end: 0 }, lifespan: 100
+                });
+            }
+        });
+
+        enemies.children.iterate(e => {
+            if (e && e.active) {
+                let dist  = Phaser.Math.Distance.Between(e.x, e.y, player.x, player.y);
+                let angle = Phaser.Math.Angle.Between(e.x, e.y, player.x, player.y);
+                let baseSpeed = difficulty === 'Facil' ? 50 : (difficulty === 'Dificil' ? 130 : 80);
+                let speed = e.eliteLevel === 3 ? baseSpeed+60 : (e.eliteLevel === 2 ? baseSpeed+30 : baseSpeed);
+                if (dist > 200) this.physics.velocityFromRotation(angle, speed, e.body.velocity);
+                else {
+                    let sv = new Phaser.Math.Vector2();
+                    this.physics.velocityFromRotation(angle + Math.PI/2, speed, sv);
+                    e.setVelocity(sv.x, sv.y);
+                }
+                e.setRotation(angle + Math.PI/2);
+                if (this.time.now > (e.lastFired || 0)) {
+                    fireEnemyBullet.call(this, e);
+                    let base = difficulty === 'Facil' ? 3000 : (difficulty === 'Dificil' ? 1200 : 2200);
+                    let rate = e.eliteLevel === 3 ? base*0.4 : (e.eliteLevel === 2 ? base*0.7 : base);
+                    e.lastFired = this.time.now + rate;
+                }
+            }
+        });
+    }
+}
+
+// ── Globais ──────────────────────────────────────────────────────────────────
+let player, bullets, enemyBullets, enemies, maze, particleManager, smokeManager, healthPowerup, casingGroup;
+let score = 0, health = 6, scoreText, healthText, ultBtn, ultText;
+let joyBase, joyThumb, joyActivePointer = null, joyVector = new Phaser.Math.Vector2(0, 0);
+let fireBtn, isInvulnerable = false, lastFired = 0;
+let isUltActive = false, ultAvailable = false;
+const MAX_ENEMIES = 3;
+
+// ── Cápsula ejetada (pixel) ──────────────────────────────────────────────────
+function ejectCasing(scene) {
+    const barrelAngle = player.rotation - Math.PI/2;
+    const ejectAngle  = barrelAngle + Math.PI/2;
+    const spawnX = player.x + Math.cos(ejectAngle) * 12;
+    const spawnY = player.y + Math.sin(ejectAngle) * 12;
+    const ejectSpeed = Phaser.Math.Between(70, 130);
+    const riseAmount = Phaser.Math.Between(15, 35);
+    const spinRad    = Phaser.Math.FloatBetween(6, 14) * (Math.random() > 0.5 ? 1 : -1);
+    const riseDur    = Phaser.Math.Between(100, 180);
+    const fallDur    = Phaser.Math.Between(200, 350);
+    const dx = Math.cos(ejectAngle) * ejectSpeed * ((riseDur+fallDur)/1000);
+    const dy = Math.sin(ejectAngle) * ejectSpeed * ((riseDur+fallDur)/1000);
+    const peakX = spawnX + dx*0.4;
+    const peakY = spawnY + dy*0.4 - riseAmount;
+    const landX = spawnX + dx, landY = spawnY + dy;
+    const casingTint = isUltActive ? 0x00eeff : 0xd4a017;
+
+    const casing = scene.add.image(spawnX, spawnY, 'casing').setOrigin(0.5).setRotation(player.rotation).setDepth(2).setTint(casingTint);
+    casingGroup.add(casing);
+
+    scene.tweens.add({ targets: casing, x: peakX, y: peakY, rotation: casing.rotation + spinRad*(riseDur/1000), scaleX: 1.1, scaleY: 0.9, duration: riseDur, ease: 'Sine.easeOut',
+        onComplete: () => {
+            scene.tweens.add({ targets: casing, x: landX, y: landY, rotation: casing.rotation + spinRad*(fallDur/1000), scaleX: 0.9, scaleY: 0.9, duration: fallDur, ease: 'Bounce.easeOut',
+                onComplete: () => {
+                    scene.tweens.add({ targets: casing, x: landX + Math.cos(ejectAngle)*Phaser.Math.Between(3,10), y: landY + Math.sin(ejectAngle)*Phaser.Math.Between(2,6), duration: 120, ease: 'Quad.easeOut',
+                        onComplete: () => {
+                            scene.tweens.add({ targets: casing, alpha: 0, scaleX: 0.6, scaleY: 0.6, duration: 700, delay: 500, onComplete: () => casing.destroy() });
+                        }
+                    });
+                }
+            });
+        }
+    });
+}
+
+function spawnHeart() {
+    if (healthPowerup.visible) return;
+    healthPowerup.setPosition(Phaser.Math.Between(100, this.scale.width-100), Phaser.Math.Between(100, this.scale.height-100)).setVisible(true);
+}
+
+function checkUltStatus() {
+    if (score >= 100 && !ultAvailable && !isUltActive) {
+        ultAvailable = true; ultBtn.setVisible(true).setAlpha(1); ultText.setVisible(true).setText('AURA\n+99!');
+    }
+}
+
+function activateUltimate() {
+    if (!ultAvailable) return;
+    ultAvailable = false; isUltActive = true; ultBtn.setAlpha(0.3);
+    let timeLeft = 7;
+    const timer = this.time.addEvent({ delay: 1000, repeat: 7, callback: () => {
+        ultText.setText(timeLeft + 'S');
+        if (timeLeft <= 0) {
+            isUltActive = false; ultBtn.setVisible(false); ultText.setVisible(false);
+            score = 0; scoreText.setText('SC:0'); timer.remove();
+        }
+        timeLeft--;
+    }});
+}
+
+function firePlayerBullet() {
+    if (this.time.now < lastFired) return;
+    lastFired = this.time.now + 90;
+    this.sound.play('som_tiro', { volume: 0.4 });
+    ejectCasing(this);
+    const texture = isUltActive ? 'bullet_ult' : 'bullet_p';
+    let b = bullets.create(player.x, player.y, texture);
+    if (b) {
+        let angle = player.rotation - Math.PI/2;
+        this.physics.velocityFromRotation(angle, 550, b.body.velocity);
+        smokeManager.emitParticleAt(player.x, player.y, 15, {
+            speed: { min: 30, max: 100 }, scale: { start: 1.2, end: 3.5 },
+            tint: isUltActive ? 0x00ccff : 0x888888, alpha: { start: 0.7, end: 0 }
+        });
+        this.time.delayedCall(isUltActive ? 3000 : 1200, () => { if (b && b.active) b.destroy(); });
+    }
+}
+
+function fireEnemyBullet(enemy) {
+    if (!player.visible) return;
+    let b = enemyBullets.create(enemy.x, enemy.y, 'bullet_e');
+    if (b) {
+        let a = Phaser.Math.Angle.Between(enemy.x, enemy.y, player.x, player.y);
+        this.physics.velocityFromRotation(a, 280, b.body.velocity);
+        this.time.delayedCall(2000, () => { if (b && b.active) b.destroy(); });
+    }
+}
+
+function takeDamage() {
+    health--;
+    healthText.setText('HP:' + Math.max(0,health) + '/3');
+    particleManager.emitParticleAt(player.x, player.y, 20);
+    this.cameras.main.shake(250, 0.04);
+    if (health <= 0) {
+        if (score > highScore) { highScore = score; localStorage.setItem('tankHighScore', highScore); }
+        player.setVisible(false);
+        // Tela de game over pixel art
+        const gog = this.make.graphics({x:0,y:0,add:false});
+        gog.fillStyle(0x000000, 0.8).fillRect(0,0,this.scale.width,this.scale.height);
+        gog.lineStyle(4, 0xff0000, 1).strokeRect(8,8,this.scale.width-16,this.scale.height-16);
+        gog.generateTexture('go_overlay', this.scale.width, this.scale.height); gog.destroy();
+        this.add.image(0, 0, 'go_overlay').setOrigin(0).setDepth(299);
+
+        this.add.text(this.scale.width/2, this.scale.height/2 - 40, 'GAME OVER', {
+            fontFamily: '"Press Start 2P"', fontSize: '28px', fill: '#ff0000'
+        }).setOrigin(0.5).setDepth(300);
+        this.add.text(this.scale.width/2, this.scale.height/2, 'MT RUIMLIXO!', {
+            fontFamily: '"Press Start 2P"', fontSize: '14px', fill: '#ff8888'
+        }).setOrigin(0.5).setDepth(300);
+        this.add.text(this.scale.width/2, this.scale.height/2 + 36, 'SCORE: ' + score, {
+            fontFamily: '"Press Start 2P"', fontSize: '12px', fill: '#ffff00'
+        }).setOrigin(0.5).setDepth(300);
+        this.time.delayedCall(2500, () => this.scene.start('MenuScene'));
+    } else {
+        isInvulnerable = true; player.setAlpha(0.4); player.setPosition(60, 60);
+        this.time.delayedCall(1500, () => { isInvulnerable = false; player.setAlpha(1); });
+    }
+}
+
+function spawnEnemy() {
+    if (enemies.countActive() >= MAX_ENEMIES) return;
+    let x = Phaser.Math.Between(100, this.scale.width-100);
+    let y = Phaser.Math.Between(100, this.scale.height-100);
+    let level = 1, texture = 'tank_e1';
+    if (score > 300) { level = 3; texture = 'tank_e3'; } else if (score > 100) { level = 2; texture = 'tank_e2'; }
+    let enemy = enemies.create(x, y, texture);
+    enemy.eliteLevel = level;
+    enemy.setBounce(0.5).setCollideWorldBounds(true);
+}
+
+// ── Config Phaser com pixelArt ativo ─────────────────────────────────────────
+const config = {
+    type: Phaser.AUTO,
+    width: Math.max(window.innerWidth, window.innerHeight),
+    height: Math.min(window.innerWidth, window.innerHeight),
+    backgroundColor: '#050d05',
+    render: {
+        pixelArt: true,
+        antialias: false,
+        antialiasGL: false
+    },
+    scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.CENTER_BOTH },
+    physics: { default: 'arcade', arcade: { gravity: { y: 0 } } },
+    scene: [MenuScene, GameScene]
+};
+
+const game = new Phaser.Game(config);
+</script>
+</body>
+</html>
