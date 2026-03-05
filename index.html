@@ -1,0 +1,1964 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Jogo de Tank fih</title>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
+    <style>
+        body { margin: 0; background: #000; overflow: hidden; touch-action: none; }
+        canvas { display: block; image-rendering: pixelated; image-rendering: crisp-edges; }
+    </style>
+</head>
+<body>
+<script>
+let difficulty = 'Medio';
+let highScore = parseInt(localStorage.getItem('tankHighScore') || 0);
+let menuMusic = null; // referência global à música do menu
+
+// ── Configurações de som (persistidas no localStorage) ───────────────────────
+const soundSettings = {
+    sfx:       localStorage.getItem('snd_sfx')   !== 'false',
+    bgMusic:   localStorage.getItem('snd_bg')    !== 'false',
+    menuMusic: localStorage.getItem('snd_menu')  !== 'false',
+};
+function saveSoundSettings() {
+    localStorage.setItem('snd_sfx',  soundSettings.sfx);
+    localStorage.setItem('snd_bg',   soundSettings.bgMusic);
+    localStorage.setItem('snd_menu', soundSettings.menuMusic);
+}
+
+// ── Utilitário de pixel art ──────────────────────────────────────────────────
+// Desenha um sprite a partir de uma grade de índices de cor
+// colorMap: { index: 0xHEXCOR }  |  0 = transparente
+function drawPixelSprite(g, pixelMap, colorMap, ps, ox, oy) {
+    pixelMap.forEach((row, ry) => {
+        row.forEach((c, rx) => {
+            if (c === 0) return;
+            g.fillStyle(colorMap[c], 1);
+            g.fillRect(ox + rx * ps, oy + ry * ps, ps, ps);
+        });
+    });
+}
+
+// ── Sprites pixel art dos tanques ───────────────────────────────────────────
+// 8x8 células, cada célula = 4px → sprite 32x32
+
+const TANK_PLAYER = [
+    [0,0,1,2,2,1,0,0],
+    [0,1,2,3,3,2,1,0],
+    [0,4,2,3,3,2,4,0],
+    [1,2,2,2,2,2,2,1],
+    [1,2,5,2,2,5,2,1],
+    [1,2,2,2,2,2,2,1],
+    [0,1,2,2,2,2,1,0],
+    [0,0,1,1,1,1,0,0],
+];
+const TANK_P_COLORS = { 1:0x1a3a1a, 2:0x2d6e2d, 3:0x4caf50, 4:0x8bc34a, 5:0xff5252 };
+
+const TANK_E1 = [
+    [0,0,1,2,2,1,0,0],
+    [0,1,2,3,3,2,1,0],
+    [0,4,2,3,3,2,4,0],
+    [1,2,2,2,2,2,2,1],
+    [1,2,5,2,2,5,2,1],
+    [1,2,2,2,2,2,2,1],
+    [0,1,2,2,2,2,1,0],
+    [0,0,1,1,1,1,0,0],
+];
+const TANK_E1_COLORS = { 1:0x0a0a1a, 2:0x1a1a3a, 3:0x3a3a6e, 4:0x5a5a9e, 5:0xffa726 };
+
+const TANK_E2_COLORS = { 1:0x1a0020, 2:0x4a0060, 3:0x8000aa, 4:0xbb44dd, 5:0xffee58 };
+const TANK_E3_COLORS = { 1:0x1a1000, 2:0x4a3000, 3:0xb8860b, 4:0xffd700, 5:0xff6b6b };
+// Sniper: azul frio com mira vermelha
+const TANK_SNIPER_COLORS = { 1:0x001530, 2:0x003060, 3:0x0066cc, 4:0x4499ff, 5:0xff2222 };
+// Kamikaze: laranja/vermelho agressivo
+const TANK_KAMIKAZE_COLORS = { 1:0x300000, 2:0x660000, 3:0xff2200, 4:0xff6600, 5:0xffff00 };
+
+// Sprite de parede 10x10 px pixel
+const WALL_MAP = [
+    [1,1,1,1,1,1,1,1,1,1],
+    [1,2,2,2,3,3,2,2,2,1],
+    [1,2,3,2,2,2,2,3,2,1],
+    [1,2,2,2,2,2,2,2,2,1],
+    [1,3,2,2,2,2,2,2,3,1],
+    [1,2,2,2,2,2,2,2,2,1],
+    [1,2,3,2,2,2,2,3,2,1],
+    [1,2,2,2,3,3,2,2,2,1],
+    [1,2,2,2,2,2,2,2,2,1],
+    [1,1,1,1,1,1,1,1,1,1],
+];
+const WALL_COLORS = { 1:0x1a3a0a, 2:0x2d5a1a, 3:0x4a7a2a };
+
+// Coração pixel 8x8
+const HEART_MAP = [
+    [0,1,1,0,0,1,1,0],
+    [1,2,2,1,1,2,2,1],
+    [1,2,2,2,2,2,2,1],
+    [1,2,2,2,2,2,2,1],
+    [0,1,2,2,2,2,1,0],
+    [0,0,1,2,2,1,0,0],
+    [0,0,0,1,1,0,0,0],
+    [0,0,0,0,0,0,0,0],
+];
+const HEART_COLORS = { 1:0x880000, 2:0xff4444 };
+
+// POWER-UP: Tiro Triplo - 3 balas em leque!
+const POWERUP_TRIPLE_SHOT = [
+    [0,0,0,0,1,0,0,0,0],
+    [0,0,0,1,2,1,0,0,0],
+    [0,0,1,2,3,2,1,0,0],
+    [0,1,2,3,4,3,2,1,0],
+    [1,2,3,4,5,4,3,2,1],
+    [0,1,2,3,4,3,2,1,0],
+    [0,0,1,2,3,2,1,0,0],
+    [0,0,0,1,2,1,0,0,0],
+    [0,0,0,0,1,0,0,0,0],
+];
+const POWERUP_TRIPLE_C = { 1:0xff5500, 2:0xff7700, 3:0xff9900, 4:0xffbb00, 5:0xffffff };
+
+// ── Cena de loading inicial (boot do jogo) ───────────────────────────────────
+// ── Utilitário compartilhado de loading ──────────────────────────────────────
+function buildLoadingScreen(scene, title, subtitle, iconType) {
+    const w = scene.scale.width, h = scene.scale.height;
+    const g = scene.make.graphics({x:0,y:0,add:false});
+    const key = iconType;
+
+    // ── Fundo preto total ─────────────────────────────────────────────────
+    g.fillStyle(0x000000).fillRect(0,0,w,h);
+    g.generateTexture(key+'bg',w,h); g.clear();
+    scene.add.image(0,0,key+'bg').setOrigin(0).setDepth(0);
+
+    // ── Círculos de radar ao fundo ────────────────────────────────────────
+    const cx = w/2, cy = h/2;
+    for(let r=30; r<Math.max(w,h); r+=48) {
+        g.lineStyle(1, 0x00ff44, Math.max(0.03, 0.18 - r*0.0004));
+        g.strokeCircle(cx, cy, r);
+    }
+    // Linhas cruzadas do radar
+    g.lineStyle(1, 0x00ff44, 0.08);
+    g.moveTo(cx, 0); g.lineTo(cx, h);
+    g.moveTo(0, cy); g.lineTo(w, cy);
+    g.strokePath();
+    g.generateTexture(key+'radar', w, h); g.clear();
+    scene.add.image(0,0,key+'radar').setOrigin(0).setDepth(1);
+
+    // Varredura do radar girando
+    const radarSweep = scene.add.graphics().setDepth(2).setAlpha(0.18);
+    let radarAngle = 0;
+    scene.time.addEvent({ delay: 16, loop: true, callback: () => {
+        radarSweep.clear();
+        radarAngle += 0.03;
+        radarSweep.fillStyle(0x00ff44, 1);
+        radarSweep.slice(cx, cy, Math.max(w,h)*0.8, radarAngle, radarAngle + 0.45, false);
+        radarSweep.fillPath();
+    }});
+
+    // ── Grid de pontos pixel (estilo militar) ─────────────────────────────
+    for(let gx=0; gx<w; gx+=24) {
+        for(let gy=0; gy<h; gy+=24) {
+            g.fillStyle(0x00ff44, 0.06).fillRect(gx, gy, 2, 2);
+        }
+    }
+    g.generateTexture(key+'dots', w, h); g.clear();
+    scene.add.image(0,0,key+'dots').setOrigin(0).setDepth(2);
+
+    // ── Scanlines CRT ─────────────────────────────────────────────────────
+    for(let sy=0; sy<h; sy+=3) g.fillStyle(0x000000, 0.22).fillRect(0, sy, w, 1);
+    g.generateTexture(key+'crt', w, h); g.clear();
+    scene.add.image(0,0,key+'crt').setOrigin(0).setDepth(60);
+
+    // ── Painel central ────────────────────────────────────────────────────
+    const pw = Math.min(w*0.88, 420), ph = 260;
+    const px = w/2-pw/2, py = h/2-ph/2;
+
+    // Sombra do painel
+    g.fillStyle(0x00ff44, 0.04).fillRect(6, 6, pw, ph);
+    g.generateTexture(key+'shadow', pw, ph); g.clear();
+    scene.add.image(px+6, py+6, key+'shadow').setOrigin(0).setDepth(3);
+
+    // Corpo do painel com gradiente simulado
+    g.fillStyle(0x000d02).fillRect(0,0,pw,ph);
+    g.fillStyle(0x001a05, 0.6).fillRect(0,0,pw,ph/2);
+    g.generateTexture(key+'panel', pw, ph); g.clear();
+    scene.add.image(px, py, key+'panel').setOrigin(0).setDepth(4);
+
+    // Borda externa brilhante
+    g.lineStyle(3, 0x00ff44, 1).strokeRect(0,0,pw,ph);
+    g.generateTexture(key+'border', pw, ph); g.clear();
+    const borderImg = scene.add.image(px, py, key+'border').setOrigin(0).setDepth(5);
+    // Pulso na borda
+    scene.tweens.add({ targets: borderImg, alpha: 0.5, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+
+    // Borda interna fina
+    g.lineStyle(1, 0x004422, 1).strokeRect(0,0,pw-8,ph-8);
+    g.generateTexture(key+'border2', pw-8, ph-8); g.clear();
+    scene.add.image(px+4, py+4, key+'border2').setOrigin(0).setDepth(5);
+
+    // Cantos em L grandes e decorativos
+    const cL = 22, cT = 3;
+    [[px,py,1,1],[px+pw,py,-1,1],[px,py+ph,1,-1],[px+pw,py+ph,-1,-1]].forEach(([bx,by,sx,sy],i)=>{
+        g.fillStyle(0x00ff88);
+        g.fillRect(0, 0, cL*sx, cT*sy);  // horizontal
+        g.fillRect(0, 0, cT*sx, cL*sy);  // vertical
+        g.generateTexture(key+'L'+i, cL+2, cL+2); g.clear();
+        scene.add.image(bx, by, key+'L'+i).setOrigin(sx>0?0:1, sy>0?0:1).setDepth(6);
+    });
+
+    // Linha divisória decorativa no topo do painel
+    g.fillStyle(0x00ff44, 0.4).fillRect(0,0,pw,1);
+    g.fillStyle(0x00ff44, 0.15).fillRect(0,1,pw,2);
+    g.generateTexture(key+'divtop', pw, 3); g.clear();
+    scene.add.image(px, py+44, key+'divtop').setOrigin(0).setDepth(5);
+
+    // ── Ícone animado ─────────────────────────────────────────────────────
+    if (iconType === 'boot_') {
+        // Tanque pixel grande (10x8 células, ps=5)
+        const tankMap = [
+            [0,0,0,1,3,3,1,0,0,0],
+            [0,0,1,2,3,3,2,1,0,0],
+            [0,1,2,2,2,2,2,2,1,0],
+            [0,4,2,2,2,2,2,2,4,0],
+            [1,2,2,2,2,2,2,2,2,1],
+            [1,2,5,2,2,2,2,5,2,1],
+            [1,2,2,2,2,2,2,2,2,1],
+            [0,1,2,2,2,2,2,2,1,0],
+        ];
+        const tc={1:0x0d2a0d,2:0x1a5c1a,3:0x00ff44,4:0x4caf50,5:0xff5252};
+        tankMap.forEach((row,ry)=>row.forEach((c,rx)=>{ if(!c) return; g.fillStyle(tc[c],1).fillRect(rx*5,ry*5,5,5); }));
+        g.generateTexture(key+'icon',50,40); g.clear();
+        const icon = scene.add.image(w/2, py+80, key+'icon').setOrigin(0.5).setDepth(6).setScale(2);
+        // Sombra do tanque
+        const iconShadow = scene.add.image(w/2+4, py+84, key+'icon').setOrigin(0.5).setDepth(5).setScale(2).setTint(0x000000).setAlpha(0.3);
+        scene.tweens.add({ targets:[icon,iconShadow], y: '+=6', duration: 700, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+        // Brilho pulsante no tanque
+        scene.tweens.add({ targets: icon, tint: { from: 0xffffff, to: 0x00ff44 }, duration: 1200, yoyo: true, repeat: -1 });
+    } else {
+        // Mira grande pixel art
+        const chMap = [
+            [0,0,0,0,1,0,0,0,0],
+            [0,0,0,0,1,0,0,0,0],
+            [0,0,0,0,1,0,0,0,0],
+            [0,0,0,2,0,2,0,0,0],
+            [1,1,1,0,0,0,1,1,1],
+            [0,0,0,2,0,2,0,0,0],
+            [0,0,0,0,1,0,0,0,0],
+            [0,0,0,0,1,0,0,0,0],
+            [0,0,0,0,1,0,0,0,0],
+        ];
+        const cc={1:0x00ff44,2:0xff3333};
+        chMap.forEach((row,ry)=>row.forEach((c,rx)=>{ if(!c) return; g.fillStyle(cc[c],1).fillRect(rx*5,ry*5,5,5); }));
+        g.generateTexture(key+'icon',45,45); g.clear();
+        const icon = scene.add.image(w/2, py+80, key+'icon').setOrigin(0.5).setDepth(6).setScale(1.8);
+        scene.tweens.add({ targets: icon, angle: 360, duration: 1200, repeat: -1, ease: 'Linear' });
+        scene.tweens.add({ targets: icon, scaleX: 2.2, scaleY: 2.2, duration: 800, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    }
+
+    // ── Título ────────────────────────────────────────────────────────────
+    const titleSize = Math.min(18, w * 0.036) + 'px';
+    // Sombra verde escura
+    scene.add.text(w/2+4, py+136+4, title, {
+        fontFamily:'"Press Start 2P"', fontSize: titleSize, fill:'#002200'
+    }).setOrigin(0.5).setDepth(5);
+    // Sombra direita brilhante
+    scene.add.text(w/2+2, py+136+2, title, {
+        fontFamily:'"Press Start 2P"', fontSize: titleSize, fill:'#004400'
+    }).setOrigin(0.5).setDepth(5);
+    const titleTxt = scene.add.text(w/2, py+136, title, {
+        fontFamily:'"Press Start 2P"', fontSize: titleSize, fill:'#00ff44'
+    }).setOrigin(0.5).setDepth(6);
+    scene.tweens.add({ targets: titleTxt, alpha: 0.75, duration: 600, yoyo: true, repeat: -1, ease: 'Stepped' });
+
+    // ── Subtítulo com cursor piscando ─────────────────────────────────────
+    const subTxt = scene.add.text(w/2, py+162, subtitle + ' _', {
+        fontFamily:'"Press Start 2P"', fontSize:'8px', fill:'#336633'
+    }).setOrigin(0.5).setDepth(6);
+    scene.tweens.add({ targets: subTxt, alpha: 0.2, duration: 400, yoyo: true, repeat: -1 });
+
+    // ── Barra de progresso elaborada ──────────────────────────────────────
+    const barW = pw - 48, barH = 18;
+    const barX = px + 24, barY = py + ph - 50;
+
+    // Label da barra
+    scene.add.text(barX, barY - 14, 'SISTEMA', {
+        fontFamily:'"Press Start 2P"', fontSize:'7px', fill:'#224422'
+    }).setOrigin(0).setDepth(6);
+
+    // Fundo da barra com padrão hachurado
+    g.fillStyle(0x001100).fillRect(0,0,barW,barH);
+    for(let hx=0; hx<barW; hx+=8) g.fillStyle(0x002200, 0.5).fillRect(hx,0,4,barH);
+    g.lineStyle(2, 0x004422, 1).strokeRect(0,0,barW,barH);
+    g.generateTexture(key+'barbg', barW, barH); g.clear();
+    scene.add.image(barX, barY, key+'barbg').setOrigin(0).setDepth(5);
+
+    // Segmentos da barra
+    const segW = 6, segGap = 2, totalSegs = Math.floor((barW-4) / (segW+segGap));
+    // Gera 3 variantes de segmento por cor
+    [[0x00ff44,'grn'],[0x88ff44,'yg'],[0xffff00,'yel']].forEach(([col, skey])=>{
+        g.fillStyle(col).fillRect(0,0,segW,barH-4);
+        g.fillStyle(0xffffff, 0.3).fillRect(0,0,segW,3); // brilho topo
+        g.generateTexture(key+'seg_'+skey, segW, barH-4); g.clear();
+    });
+
+    const segments = [];
+    for(let i=0; i<totalSegs; i++){
+        const seg = scene.add.image(barX+2+i*(segW+segGap), barY+2, key+'seg_grn')
+            .setOrigin(0).setDepth(6).setAlpha(0);
+        segments.push(seg);
+    }
+
+    // Brilho deslizante sobre a barra
+    g.fillStyle(0xffffff, 0.12).fillRect(0,0,30,barH-4);
+    g.generateTexture(key+'glow', 30, barH-4); g.clear();
+    const glowBar = scene.add.image(barX+2, barY+2, key+'glow').setOrigin(0).setDepth(7).setAlpha(0);
+
+    // Texto % à direita
+    const pctText = scene.add.text(barX+barW+8, barY+barH/2, '0%', {
+        fontFamily:'"Press Start 2P"', fontSize:'8px', fill:'#00ff44'
+    }).setOrigin(0, 0.5).setDepth(6);
+
+    const updateBar = (v) => {
+        const filled = Math.floor(v * totalSegs);
+        segments.forEach((seg, i) => {
+            if (i >= filled) { seg.setAlpha(0); return; }
+            seg.setAlpha(1);
+            const ratio = i / totalSegs;
+            seg.setTexture(ratio < 0.4 ? key+'seg_grn' : ratio < 0.75 ? key+'seg_yg' : key+'seg_yel');
+        });
+        // Brilho desliza na frente da barra preenchida
+        if (filled > 0) {
+            const glowX = barX+2 + (filled-1)*(segW+segGap);
+            glowBar.setX(glowX).setAlpha(0.6);
+        }
+        pctText.setText(Math.floor(v*100)+'%');
+    };
+
+    // ── Faíscas decorativas nos cantos ────────────────────────────────────
+    g.fillStyle(0x00ff44).fillRect(0,0,3,3); g.generateTexture(key+'spark',3,3); g.clear();
+    [[px+8, py+8],[px+pw-8, py+8],[px+8, py+ph-8],[px+pw-8, py+ph-8]].forEach(([sx,sy])=>{
+        scene.add.particles(sx, sy, key+'spark', {
+            speed: { min:10, max:40 }, scale: { start:1.2, end:0 },
+            alpha: { start:0.9, end:0 }, lifespan: { min:400, max:800 },
+            quantity:1, frequency:200, tint:[0x00ff44,0x00ff88,0xffffff]
+        }).setDepth(7);
+    });
+
+    return { updateBar };
+}
+
+
+// ── Cena de loading inicial ───────────────────────────────────────────────────
+class BootScene extends Phaser.Scene {
+    constructor() { super('BootScene'); }
+
+    preload() {
+        if (!this.cache.audio.exists('musica_fundo')) {
+            this.load.audio('musica_fundo', 'https://files.catbox.moe/thxnkk.mp3');
+        }
+    }
+
+    create() {
+        const { updateBar } = buildLoadingScreen(this, 'JOGO DE TANK FIH', 'CARREGANDO...', 'boot_');
+
+        const ANIM_MS = 2400;
+        let elapsed = 0;
+
+        this.time.addEvent({
+            delay: 16, repeat: Math.ceil(ANIM_MS / 16),
+            callback: () => {
+                elapsed += 16;
+                updateBar(Math.min(elapsed / ANIM_MS, 1));
+                if (elapsed >= ANIM_MS) this.scene.start('MenuScene');
+            }
+        });
+    }
+}
+
+// ── Cena de loading antes da partida ─────────────────────────────────────────
+class GameLoadScene extends Phaser.Scene {
+    constructor() { super('GameLoadScene'); }
+
+    preload() {
+        this.load.audio('som_tiro',    'https://labs.phaser.io/assets/audio/SoundEffects/blaster.mp3');
+        this.load.audio('som_explosao','https://labs.phaser.io/assets/audio/SoundEffects/explosion.mp3');
+        if (!this.cache.audio.exists('trilha_fase')) {
+            this.load.audio('trilha_fase', 'https://files.catbox.moe/zlma0q.mp3');
+        }
+    }
+
+    create() {
+        const { updateBar } = buildLoadingScreen(this, 'PREPARANDO', 'INICIANDO PARTIDA...', 'game_');
+
+        const ANIM_MS = 2500;
+        let elapsed = 0;
+
+        this.time.addEvent({
+            delay: 16, repeat: Math.ceil(ANIM_MS / 16),
+            callback: () => {
+                elapsed += 16;
+                updateBar(Math.min(elapsed / ANIM_MS, 1));
+                if (elapsed >= ANIM_MS) this.scene.start('GameScene');
+            }
+        });
+    }
+}
+
+
+class MenuScene extends Phaser.Scene {
+    constructor() { super('MenuScene'); }
+
+    preload() {
+        // áudio carregado pelo BootScene
+    }
+
+    create() {
+        const w = this.scale.width, h = this.scale.height;
+
+        // ── Música do menu ────────────────────────────────────────────────
+        // Reutiliza a instância global se já existir, senão cria uma nova
+        if (!menuMusic) {
+            menuMusic = this.sound.add('musica_fundo', { volume: 0.5, loop: true });
+        }
+        // Retoma de onde parou (ou começa do início na primeira vez)
+        if (!menuMusic.isPlaying) {
+            menuMusic.resume() || menuMusic.play();
+        }
+        // Respeita configuração de som do menu
+        menuMusic.setMute(!soundSettings.menuMusic);
+        const g = this.make.graphics({x:0,y:0,add:false});
+
+        // ── Fundo sólido escuro estilo pixel art ─────────────────────────
+        g.fillStyle(0x050d05).fillRect(0, 0, w, h);
+        g.generateTexture('bg_solid', w, h); g.clear();
+        this.add.image(0, 0, 'bg_solid').setOrigin(0);
+
+        // Grid pixel art 16x16
+        g.lineStyle(1, 0x0a1f0a, 1);
+        for (let x = 0; x < w; x += 16) { g.moveTo(x,0); g.lineTo(x,h); }
+        for (let y = 0; y < h; y += 16) { g.moveTo(0,y); g.lineTo(w,y); }
+        g.strokePath();
+        g.generateTexture('grid_px', w, h); g.clear();
+        this.add.image(0, 0, 'grid_px').setOrigin(0);
+
+        // ── Scanlines (efeito CRT) ────────────────────────────────────────
+        for (let y = 0; y < h; y += 4) {
+            g.fillStyle(0x000000, 0.18).fillRect(0, y, w, 2);
+        }
+        g.generateTexture('scanlines', w, h); g.clear();
+        this.add.image(0, 0, 'scanlines').setOrigin(0).setDepth(50);
+
+        // ── Partículas quadradas (pixel sparks) ───────────────────────────
+        g.fillStyle(0xffffff).fillRect(0,0,4,4); g.generateTexture('star',4,4); g.clear();
+        g.fillStyle(0x00ff44).fillRect(0,0,6,6); g.generateTexture('spark',6,6); g.clear();
+
+        this.add.particles(0, 0, 'star', {
+            x: { min: 0, max: w }, y: { min: 0, max: h },
+            speedY: { min: -10, max: -35 }, speedX: { min: -5, max: 5 },
+            scale: { start: 1, end: 0 }, alpha: { start: 0.6, end: 0 },
+            lifespan: { min: 2000, max: 4500 }, quantity: 1, frequency: 80,
+            tint: [0x00ff00, 0x00ff88, 0xffffff, 0xffff00]
+        });
+
+        // ── Borda pixel art do painel ──────────────────────────────────────
+        const panelW = Math.min(w * 0.82, 420), panelH = h * 0.78;
+        const panelX = w/2 - panelW/2, panelY = h * 0.11;
+        const px = 4; // tamanho do pixel da borda
+
+        // Fundo do painel
+        g.fillStyle(0x000000, 0.75).fillRect(0, 0, panelW, panelH);
+        // Borda pixelada (sem arredondamento)
+        g.lineStyle(px, 0x00ff44, 1).strokeRect(0, 0, panelW, panelH);
+        // Borda interna mais escura
+        g.lineStyle(px, 0x004422, 1).strokeRect(px, px, panelW - px*2, panelH - px*2);
+        g.generateTexture('panel', panelW, panelH); g.clear();
+        this.add.image(panelX, panelY, 'panel').setOrigin(0).setDepth(1);
+
+        // Cantos decorativos pixel art
+        const cSz = 16;
+        [[panelX, panelY],[panelX+panelW-cSz, panelY],
+         [panelX, panelY+panelH-cSz],[panelX+panelW-cSz, panelY+panelH-cSz]].forEach(([cx, cy]) => {
+            g.fillStyle(0x00ff88).fillRect(0,0,cSz,4).fillRect(0,0,4,cSz);
+            g.generateTexture('corner_'+cx+'_'+cy, cSz, cSz); g.clear();
+            this.add.image(cx, cy, 'corner_'+cx+'_'+cy).setOrigin(0).setDepth(3);
+        });
+
+        // ── Título JOGO DE TANK FIH em pixel art ────────────────────────────────
+        // Sombra dura (offset, sem suavização)
+        this.add.text(w/2 + 4, h * 0.175 + 4, 'JOGO DE TANK FIH', {
+            fontFamily: '"Press Start 2P"',
+            fontSize: Math.min(28, w * 0.055) + 'px',
+            fill: '#003300'
+        }).setOrigin(0.5).setDepth(2);
+
+        const titleText = this.add.text(w/2, h * 0.175, 'JOGO DE TANK FIH', {
+            fontFamily: '"Press Start 2P"',
+            fontSize: Math.min(28, w * 0.055) + 'px',
+            fill: '#00ff44'
+        }).setOrigin(0.5).setDepth(3);
+
+        // Piscar do título (pixel style)
+        this.tweens.add({ targets: titleText, alpha: 0.7, duration: 500, yoyo: true, repeat: -1, ease: 'Stepped' });
+
+        // Subtítulo
+        this.add.text(w/2, h * 0.27, '>  MELHOR QUE DO EDIR  <', {
+            fontFamily: '"Press Start 2P"', fontSize: '8px', fill: '#44aa66'
+        }).setOrigin(0.5).setDepth(3);
+
+        // Linha decorativa pixel
+        g.fillStyle(0x00ff44).fillRect(0,0,panelW*0.7,2); g.generateTexture('hline', panelW*0.7, 2); g.clear();
+        this.add.image(w/2, h*0.295, 'hline').setOrigin(0.5).setDepth(2);
+
+        // ── Recorde ────────────────────────────────────────────────────────
+        const itemW = Math.min(panelW - 40, 280);
+        const recY = h * 0.365;
+        g.fillStyle(0x001100).fillRect(0,0,itemW,40);
+        g.lineStyle(2, 0xffff00, 1).strokeRect(0,0,itemW,40);
+        g.generateTexture('rec_bg', itemW, 40); g.clear();
+        this.add.image(w/2, recY, 'rec_bg').setOrigin(0.5).setDepth(2);
+        this.add.text(w/2, recY, '>> REC: ' + highScore, {
+            fontFamily: '"Press Start 2P"', fontSize: '12px', fill: '#ffff00'
+        }).setOrigin(0.5).setDepth(3);
+
+        // ── Botão JOGAR (pixel art, sem arredondamento) ───────────────────
+        const playY = h * 0.475;
+        const playBtnH = 48;
+
+        // Normal - VERDE BRILHANTE
+        g.fillStyle(0x004400).fillRect(0,4,itemW,playBtnH);  // sombra
+        g.fillStyle(0x00aa44).fillRect(0,0,itemW,playBtnH);  // corpo
+        g.fillStyle(0x00ff88, 0.6).fillRect(0,0,itemW,playBtnH/2);  // reflexo brilhante
+        g.lineStyle(3, 0x00ff44, 1).strokeRect(0,0,itemW,playBtnH);
+        g.lineStyle(1, 0x00ff88, 0.5).strokeRect(-1,-1,itemW+2,playBtnH+2);
+        g.generateTexture('btn_play', itemW, playBtnH+4); g.clear();
+
+        // Hover - MAIS BRILHO
+        g.fillStyle(0x00dd55).fillRect(0,0,itemW,playBtnH);
+        g.fillStyle(0xffffff,0.2).fillRect(0,0,itemW,playBtnH/2);
+        g.lineStyle(3, 0x00ff88, 1).strokeRect(0,0,itemW,playBtnH);
+        g.generateTexture('btn_play_hover', itemW, playBtnH); g.clear();
+
+        const playImg = this.add.image(w/2, playY, 'btn_play').setOrigin(0.5).setDepth(2).setInteractive();
+        const playText = this.add.text(w/2, playY, '▶ JOGAR ◀', {
+            fontFamily: '"Press Start 2P"', fontSize: '14px', fill: '#000000', fontStyle: 'bold'
+        }).setOrigin(0.5).setDepth(3);
+
+        playImg.on('pointerover', () => { 
+            playImg.setTexture('btn_play_hover'); 
+            playText.setStyle({ fill: '#003300', fontStyle: 'bold' }); 
+            this.tweens.add({ targets: playImg, scale: 1.05, duration: 150, ease: 'Quad.easeOut' });
+        });
+        playImg.on('pointerout',  () => { 
+            playImg.setTexture('btn_play'); 
+            playText.setStyle({ fill: '#000000' }); 
+            this.tweens.add({ targets: playImg, scale: 1, duration: 150, ease: 'Quad.easeOut' });
+        });
+        playImg.on('pointerdown', () => {
+            this.cameras.main.flash(120, 0, 255, 0);
+            // Pausa a música do menu (guarda a posição)
+            if (menuMusic && menuMusic.isPlaying) menuMusic.pause();
+            this.time.delayedCall(120, () => this.scene.start('GameLoadScene'));
+        });
+
+        // ── Botão DIFICULDADE ──────────────────────────────────────────────
+        const diffY = h * 0.59;
+        const diffBtnH = 44;
+
+        // Normal - Cores mais vibrantes
+        g.fillStyle(0x001a1a).fillRect(0,0,itemW,diffBtnH);
+        g.lineStyle(2, 0x00aa44, 1).strokeRect(0,0,itemW,diffBtnH);
+        g.generateTexture('btn_diff', itemW, diffBtnH); g.clear();
+
+        // Hover
+        g.fillStyle(0x002a2a).fillRect(0,0,itemW,diffBtnH);
+        g.lineStyle(2, 0x00ff88, 1).strokeRect(0,0,itemW,diffBtnH);
+        g.fillStyle(0x00ff88,0.15).fillRect(2,2,itemW-4,diffBtnH-4);
+        g.generateTexture('btn_diff_hover', itemW, diffBtnH); g.clear();
+
+        const diffImg = this.add.image(w/2, diffY, 'btn_diff').setOrigin(0.5).setDepth(2).setInteractive();
+        const diffColors = { 'Facil': '#00ff88', 'Medio': '#ffff00', 'Dificil': '#ff4444' };
+        const diffIcons  = { 'Facil': '★', 'Medio': '★★', 'Dificil': '★★★' };
+        const diffText = this.add.text(w/2, diffY, '', {
+            fontFamily: '"Press Start 2P"', fontSize: '9px', fill: diffColors[difficulty]
+        }).setOrigin(0.5).setDepth(3);
+
+        const updateDiff = () => {
+            diffText.setText(diffIcons[difficulty] + ' ' + difficulty.toUpperCase() + ' ' + diffIcons[difficulty]);
+            diffText.setStyle({ fill: diffColors[difficulty] });
+        };
+        updateDiff();
+
+        diffImg.on('pointerover', () => { 
+            diffImg.setTexture('btn_diff_hover');
+            this.tweens.add({ targets: diffImg, scale: 1.05, duration: 150 });
+        });
+        diffImg.on('pointerout',  () => { 
+            diffImg.setTexture('btn_diff');
+            this.tweens.add({ targets: diffImg, scale: 1, duration: 150 });
+        });
+        diffImg.on('pointerdown', () => {
+            if (difficulty === 'Facil') difficulty = 'Medio';
+            else if (difficulty === 'Medio') difficulty = 'Dificil';
+            else difficulty = 'Facil';
+            updateDiff();
+            this.tweens.add({ targets: diffText, scaleX: 1.3, scaleY: 1.3, duration: 60, yoyo: true });
+        });
+
+        // ── Instruções ──────────────────────────────────────────────────────
+        const instrY = h * 0.72;
+        g.fillStyle(0x000000, 0.5).fillRect(0,0,itemW,52);
+        g.lineStyle(2, 0x113311, 1).strokeRect(0,0,itemW,52);
+        g.generateTexture('instr_bg', itemW, 52); g.clear();
+        this.add.image(w/2, instrY, 'instr_bg').setOrigin(0.5).setDepth(2);
+        this.add.text(w/2, instrY - 12, 'JOY ESQ = MOVER', {
+            fontFamily: '"Press Start 2P"', fontSize: '8px', fill: '#5a8a5a'
+        }).setOrigin(0.5).setDepth(3);
+        this.add.text(w/2, instrY + 8, 'FOGO BB = ATIRAR', {
+            fontFamily: '"Press Start 2P"', fontSize: '8px', fill: '#5a8a5a'
+        }).setOrigin(0.5).setDepth(3);
+
+        // ── Hint piscando ─────────────────────────────────────────────────
+        const hint = this.add.text(w/2, h * 0.9, '-- TOQUE EM JOGAR --', {
+            fontFamily: '"Press Start 2P"', fontSize: '8px', fill: '#224422'
+        }).setOrigin(0.5).setDepth(3);
+        this.tweens.add({ targets: hint, alpha: 0, duration: 700, yoyo: true, repeat: -1 });
+
+        // ── Botão SOM ──────────────────────────────────────────────────────
+        const somBtnY = h * 0.835;
+        g.fillStyle(0x001122).fillRect(0,0,itemW,40);
+        g.lineStyle(2, 0x0088ff, 1).strokeRect(0,0,itemW,40);
+        g.generateTexture('btn_som', itemW, 40); g.clear();
+
+        g.fillStyle(0x002244).fillRect(0,0,itemW,40);
+        g.lineStyle(2, 0x00ccff, 1).strokeRect(0,0,itemW,40);
+        g.generateTexture('btn_som_hover', itemW, 40); g.clear();
+
+        const somImg = this.add.image(w/2, somBtnY, 'btn_som').setOrigin(0.5).setDepth(2).setInteractive();
+        const somText = this.add.text(w/2, somBtnY, '♪  CONFIGURAR SOM', {
+            fontFamily: '"Press Start 2P"', fontSize: '9px', fill: '#00ccff'
+        }).setOrigin(0.5).setDepth(3);
+
+        somImg.on('pointerover', () => somImg.setTexture('btn_som_hover'));
+        somImg.on('pointerout',  () => somImg.setTexture('btn_som'));
+        somImg.on('pointerdown', () => {
+            this.cameras.main.flash(80, 0, 100, 255);
+            this.time.delayedCall(80, () => this.scene.start('SoundScene'));
+        });
+
+        // Versão
+        this.add.text(w - 8, h - 8, 'v2.0 PX', {
+            fontFamily: '"Press Start 2P"', fontSize: '6px', fill: '#1a3a1a'
+        }).setOrigin(1, 1).setDepth(3);
+
+        // Animação entrada
+        [titleText, playImg, playText, diffImg, diffText].forEach((obj, i) => {
+            obj.setAlpha(0).setY(obj.y + 16);
+            this.tweens.add({ targets: obj, alpha: 1, y: obj.y - 16, duration: 300, delay: i * 60, ease: 'Back.easeOut' });
+        });
+    }
+}
+
+class SoundScene extends Phaser.Scene {
+    constructor() { super('SoundScene'); }
+
+    create() {
+        const w = this.scale.width, h = this.scale.height;
+        const g = this.make.graphics({x:0,y:0,add:false});
+
+        // ── Fundo ─────────────────────────────────────────────────────────
+        g.fillStyle(0x050d05).fillRect(0,0,w,h);
+        g.generateTexture('sb_bg', w, h); g.clear();
+        this.add.image(0,0,'sb_bg').setOrigin(0);
+
+        // Grid
+        g.lineStyle(1, 0x0a1f0a, 1);
+        for (let x=0;x<w;x+=16){g.moveTo(x,0);g.lineTo(x,h);}
+        for (let y=0;y<h;y+=16){g.moveTo(0,y);g.lineTo(w,y);}
+        g.strokePath(); g.generateTexture('sb_grid',w,h); g.clear();
+        this.add.image(0,0,'sb_grid').setOrigin(0);
+
+        // Scanlines
+        for (let y=0;y<h;y+=4) g.fillStyle(0x000000,0.15).fillRect(0,y,w,2);
+        g.generateTexture('sb_crt',w,h); g.clear();
+        this.add.image(0,0,'sb_crt').setOrigin(0).setDepth(50);
+
+        // ── Painel ────────────────────────────────────────────────────────
+        const panelW = Math.min(w*0.82, 400), panelH = h*0.72;
+        const panelX = w/2-panelW/2, panelY = h*0.14;
+        g.fillStyle(0x000000,0.8).fillRect(0,0,panelW,panelH);
+        g.lineStyle(4,0x00ff44,1).strokeRect(0,0,panelW,panelH); // Borda VERDE brilhante
+        g.lineStyle(2,0x00aa22,1).strokeRect(4,4,panelW-8,panelH-8);
+        // Brilho externo
+        g.lineStyle(2,0x00ff88,0.5).strokeRect(-2,-2,panelW+4,panelH+4);
+        g.generateTexture('sb_panel',panelW,panelH); g.clear();
+        this.add.image(panelX,panelY,'sb_panel').setOrigin(0).setDepth(1);
+
+        // Cantos - VERDE BRILHANTE
+        const cSz=16;
+        [[panelX,panelY],[panelX+panelW-cSz,panelY],
+         [panelX,panelY+panelH-cSz],[panelX+panelW-cSz,panelY+panelH-cSz]].forEach(([cx,cy])=>{
+            g.fillStyle(0x00ff44).fillRect(0,0,cSz,4).fillRect(0,0,4,cSz);
+            g.fillStyle(0x00ff88).fillRect(2,2,8,2).fillRect(2,2,2,8); // Brilho
+            g.generateTexture('sc_'+cx+'_'+cy,cSz,cSz); g.clear();
+            this.add.image(cx,cy,'sc_'+cx+'_'+cy).setOrigin(0).setDepth(3);
+        });
+
+        // ── Título ────────────────────────────────────────────────────────
+        this.add.text(w/2+3, h*0.19+3, '🎵 CONFIGURAR SOM 🎵', {
+            fontFamily: '"Press Start 2P"', fontSize: Math.min(16, w*0.032)+'px', fill: '#001100'
+        }).setOrigin(0.5).setDepth(2);
+        this.add.text(w/2, h*0.19, '🎵 CONFIGURAR SOM 🎵', {
+            fontFamily: '"Press Start 2P"', fontSize: Math.min(16, w*0.032)+'px', fill: '#00ff44'
+        }).setOrigin(0.5).setDepth(3);
+
+        // Linha decorativa - VERDE COM BRILHO
+        g.fillStyle(0x00ff44).fillRect(0,0,panelW*0.6,2);
+        g.generateTexture('sb_hline',panelW*0.6,2); g.clear();
+        this.add.image(w/2, h*0.235, 'sb_hline').setOrigin(0.5).setDepth(2);
+
+        // ── Função para criar toggle ───────────────────────────────────────
+        const itemW = Math.min(panelW-40, 300);
+        const toggleH = 52;
+
+        const makeToggle = (label, yPos, settingKey) => {
+            const isOn = soundSettings[settingKey];
+
+            // Fundo do item
+            g.fillStyle(0x001100).fillRect(0,0,itemW,toggleH);
+            g.lineStyle(2,0x00aa22,1).strokeRect(0,0,itemW,toggleH);
+            g.fillStyle(0x002200,0.5).fillRect(2,2,itemW-4,toggleH-4);
+            g.generateTexture('tog_bg_'+settingKey, itemW, toggleH); g.clear();
+            const rowBg = this.add.image(w/2, yPos, 'tog_bg_'+settingKey).setOrigin(0.5).setDepth(2);
+
+            // Label - VERDE CLARO
+            this.add.text(w/2 - itemW/2 + 16, yPos, label, {
+                fontFamily: '"Press Start 2P"', fontSize: '9px', fill: '#00ff88'
+            }).setOrigin(0, 0.5).setDepth(3);
+
+            // Botão ON/OFF
+            const btnW=64, btnH=32;
+
+            const drawToggleBtn = (on) => {
+                // fundo off - VERMELHO escuro
+                g.fillStyle(0x440000).fillRect(0,0,btnW,btnH);
+                g.lineStyle(2,0x880000,1).strokeRect(0,0,btnW,btnH);
+                // fundo on - VERDE brilhante
+                if (on) {
+                    g.fillStyle(0x00aa22).fillRect(0,0,btnW,btnH);
+                    g.lineStyle(2,0x00ff44,1).strokeRect(0,0,btnW,btnH);
+                    // brilho topo
+                    g.fillStyle(0x00ff88,0.4).fillRect(2,2,btnW-4,btnH/2-2);
+                }
+                const key = 'tbtn_'+settingKey+'_'+(on?'on':'off');
+                g.generateTexture(key, btnW, btnH); g.clear();
+                return key;
+            };
+
+            drawToggleBtn(false);
+            drawToggleBtn(true);
+
+            const btnX = w/2 + itemW/2 - btnW/2 - 8;
+            const btnImg  = this.add.image(btnX, yPos, 'tbtn_'+settingKey+'_'+(isOn?'on':'off'))
+                .setOrigin(0.5).setDepth(3).setInteractive();
+            const btnLabel = this.add.text(btnX, yPos, isOn ? 'ON' : 'OFF', {
+                fontFamily: '"Press Start 2P"', fontSize: '10px',
+                fill: isOn ? '#00ff44' : '#ff4444'
+            }).setOrigin(0.5).setDepth(4);
+
+            const toggle = () => {
+                soundSettings[settingKey] = !soundSettings[settingKey];
+                saveSoundSettings();
+                const on = soundSettings[settingKey];
+                btnImg.setTexture('tbtn_'+settingKey+'_'+(on?'on':'off'));
+                btnLabel.setText(on ? 'ON' : 'OFF').setStyle({ fill: on ? '#00ff44' : '#ff4444' });
+
+                // Aplica efeito imediato
+                if (settingKey === 'menuMusic' && menuMusic) {
+                    menuMusic.setMute(!on);
+                }
+
+                this.tweens.add({ targets: [btnImg, btnLabel], scaleX:1.2, scaleY:1.2, duration:60, yoyo:true });
+            };
+
+            btnImg.on('pointerdown', toggle);
+            rowBg.setInteractive().on('pointerdown', toggle);
+
+            // Indicador lateral colorido
+            g.fillStyle(isOn ? 0x00ff44 : 0xff2222).fillRect(0,0,4,toggleH);
+            g.generateTexture('tog_ind_'+settingKey, 4, toggleH); g.clear();
+            const indicator = this.add.image(w/2-itemW/2, yPos, 'tog_ind_'+settingKey)
+                .setOrigin(0,0.5).setDepth(4);
+
+            // Atualiza indicador lateral ao toglar
+            btnImg.on('pointerdown', () => {
+                const on = soundSettings[settingKey];
+                g.fillStyle(on ? 0x00ff44 : 0xff2222).fillRect(0,0,4,toggleH);
+                g.generateTexture('tog_ind_'+settingKey, 4, toggleH); g.clear();
+                indicator.setTexture('tog_ind_'+settingKey);
+            });
+        };
+
+        // ── Os três toggles ───────────────────────────────────────────────
+        const startY = h * 0.37;
+        const gap    = toggleH + 18;
+
+        makeToggle('EFEITOS SONOROS', startY,        'sfx');
+        makeToggle('MUSICA DO MENU',  startY + gap,  'menuMusic');
+        makeToggle('TRILHA DA FASE',  startY + gap*2,'bgMusic');
+
+        // Descrições
+        const descY = startY + gap*3 + 2;
+        this.add.text(w/2, descY, 'EFEITOS: tiros e explosoes', {
+            fontFamily: '"Press Start 2P"', fontSize: '7px', fill: '#335566'
+        }).setOrigin(0.5).setDepth(3);
+        this.add.text(w/2, descY+16, 'MENU: musica na tela inicial', {
+            fontFamily: '"Press Start 2P"', fontSize: '7px', fill: '#335566'
+        }).setOrigin(0.5).setDepth(3);
+        this.add.text(w/2, descY+32, 'FASE: musica durante a partida', {
+            fontFamily: '"Press Start 2P"', fontSize: '7px', fill: '#335566'
+        }).setOrigin(0.5).setDepth(3);
+
+        // ── Botão VOLTAR ──────────────────────────────────────────────────
+        const backY = h*0.885;
+        g.fillStyle(0x110000).fillRect(0,4,itemW,44);
+        g.fillStyle(0x330000).fillRect(0,0,itemW,44);
+        g.lineStyle(2,0xff4444,1).strokeRect(0,0,itemW,44);
+        g.generateTexture('btn_back',itemW,44); g.clear();
+
+        g.fillStyle(0x550000).fillRect(0,0,itemW,44);
+        g.lineStyle(2,0xff8888,1).strokeRect(0,0,itemW,44);
+        g.generateTexture('btn_back_h',itemW,44); g.clear();
+
+        const backImg = this.add.image(w/2, backY, 'btn_back').setOrigin(0.5).setDepth(2).setInteractive();
+        const backTxt = this.add.text(w/2, backY, '< VOLTAR', {
+            fontFamily: '"Press Start 2P"', fontSize: '12px', fill: '#ff6666'
+        }).setOrigin(0.5).setDepth(3);
+
+        backImg.on('pointerover', () => { backImg.setTexture('btn_back_h'); backTxt.setStyle({fill:'#ffaaaa'}); });
+        backImg.on('pointerout',  () => { backImg.setTexture('btn_back');   backTxt.setStyle({fill:'#ff6666'}); });
+        backImg.on('pointerdown', () => {
+            this.cameras.main.flash(80, 255, 0, 0);
+            this.time.delayedCall(80, () => this.scene.start('MenuScene'));
+        });
+    }
+}
+
+class GameScene extends Phaser.Scene {
+    constructor() { super('GameScene'); }
+
+
+
+
+
+
+
+
+
+    create() {
+        score = 0; abilityPoints = 0; health = 6; isUltActive = false; ultAvailable = false;
+        poeiraAvailable = false; poeiraUses = 0; playerShield = false;
+        isInvulnerable = false; lastFired = 0;
+
+        // Música do menu já está pausada; sem música durante a partida
+        // Trilha da fase
+        if (!this.cache.audio.exists('musica_fase')) {
+            // reutiliza o mesmo arquivo do menu como trilha da fase
+        }
+        let bgMusic = this.sound.get('bgMusic_instance');
+        if (!bgMusic) {
+            bgMusic = this.sound.add('trilha_fase', { volume: 0.35, loop: true });
+            bgMusic._customKey = 'bgMusic_instance';
+        }
+        if (soundSettings.bgMusic) { if (!bgMusic.isPlaying) bgMusic.play(); }
+        else bgMusic.stop();
+        this.bgMusic = bgMusic;
+
+        this.input.addPointer(4);
+        const g = this.make.graphics({x: 0, y: 0, add: false});
+        const w = this.scale.width, h = this.scale.height;
+        const WW = w * 3, WH = h * 3; // mundo 3x maior
+
+        // Define bounds do mundo físico e da câmera
+        this.physics.world.setBounds(0, 0, WW, WH);
+        this.cameras.main.setBounds(0, 0, WW, WH);
+
+        // ── Fundo pixel art ───────────────────────────────────────────────
+        // Tiles de chão 8x8
+        const FLOOR_TILE = [
+            [1,1,1,1,1,1,1,1],
+            [1,2,1,1,1,1,1,1],
+            [1,1,1,1,1,1,2,1],
+            [1,1,1,1,1,1,1,1],
+            [1,1,1,2,1,1,1,1],
+            [1,1,1,1,1,1,1,1],
+            [1,1,1,1,1,2,1,1],
+            [1,1,1,1,1,1,1,1],
+        ];
+        const FLOOR_COLORS = { 1:0x0d1f09, 2:0x152b0d };
+        drawPixelSprite(g, FLOOR_TILE, FLOOR_COLORS, 8, 0, 0);
+        g.generateTexture('floor_tile', 64, 64); g.clear();
+
+        // Tile para fundo repetido — cobre o mundo inteiro
+        for (let ty = 0; ty < WH; ty += 64) {
+            for (let tx = 0; tx < WW; tx += 64) {
+                this.add.image(tx, ty, 'floor_tile').setOrigin(0).setDepth(0);
+            }
+        }
+
+        // Grid sutil — cobre o mundo inteiro
+        g.lineStyle(1, 0x0a1a06, 1);
+        for (let lx = 0; lx < WW; lx += 16) { g.moveTo(lx,0); g.lineTo(lx,WH); }
+        for (let ly = 0; ly < WH; ly += 16) { g.moveTo(0,ly); g.lineTo(WW,ly); }
+        g.strokePath(); g.generateTexture('grid_game', WW, WH); g.clear();
+        this.add.image(0, 0, 'grid_game').setOrigin(0).setDepth(0);
+
+        // Scanlines — fixo na câmera, cobre só a tela
+        for (let sy = 0; sy < h; sy += 4) g.fillStyle(0x000000, 0.1).fillRect(0, sy, w, 2);
+        g.generateTexture('crt', w, h); g.clear();
+        this.add.image(0, 0, 'crt').setOrigin(0).setDepth(250).setScrollFactor(0);
+
+        // ── Texturas pixel art ────────────────────────────────────────────
+        // Parede pixel
+        drawPixelSprite(g, WALL_MAP, WALL_COLORS, 4, 0, 0);
+        g.generateTexture('wall', 40, 40); g.clear();
+
+        // Tanque do jogador
+        drawPixelSprite(g, TANK_PLAYER, TANK_P_COLORS, 4, 0, 0);
+        g.generateTexture('tank_p', 32, 32); g.clear();
+
+        // Inimigos
+        drawPixelSprite(g, TANK_E1, TANK_E1_COLORS, 4, 0, 0);
+        g.generateTexture('tank_e1', 32, 32); g.clear();
+        drawPixelSprite(g, TANK_E1, TANK_E2_COLORS, 4, 0, 0);
+        g.generateTexture('tank_e2', 32, 32); g.clear();
+        drawPixelSprite(g, TANK_E1, TANK_E3_COLORS, 4, 0, 0);
+        g.generateTexture('tank_e3', 32, 32); g.clear();
+        // Sniper — corpo azul com cano longo
+        drawPixelSprite(g, TANK_E1, TANK_SNIPER_COLORS, 4, 0, 0);
+        g.fillStyle(0x4499ff).fillRect(14, 0, 4, 20); // cano longo
+        g.generateTexture('tank_sniper', 32, 32); g.clear();
+        // Kamikaze — corpo vermelho menor e com listras
+        drawPixelSprite(g, TANK_E1, TANK_KAMIKAZE_COLORS, 4, 0, 0);
+        g.fillStyle(0xffff00,0.7).fillRect(4,12,24,4); // listra amarela
+        g.generateTexture('tank_kamikaze', 32, 32); g.clear();
+
+        // Balas pixel (retângulo, sem círculo)
+        g.fillStyle(0xffff00).fillRect(0,0,4,6).fillStyle(0xffffff).fillRect(1,0,2,2);
+        g.generateTexture('bullet_p', 4, 6); g.clear();
+        g.fillStyle(0x00eeff).fillRect(0,0,5,8).fillStyle(0xffffff).fillRect(1,0,3,2);
+        g.generateTexture('bullet_ult', 5, 8); g.clear();
+        g.fillStyle(0xff6600).fillRect(0,0,4,6).fillStyle(0xff9900).fillRect(1,0,2,2);
+        g.generateTexture('bullet_e', 4, 6); g.clear();
+        // Bala sniper — longa e azul brilhante
+        // Bala sniper — grossa, longa, com brilho intenso
+        g.fillStyle(0x0022cc).fillRect(0,0,6,18);       // corpo azul escuro
+        g.fillStyle(0x44aaff).fillRect(1,0,4,14);       // camada azul brilhante
+        g.fillStyle(0xffffff).fillRect(2,0,2,6);        // ponta branca intensa
+        g.fillStyle(0x88ddff,0.6).fillRect(0,0,6,3);    // flash na ponta
+        g.generateTexture('bullet_sniper', 6, 18); g.clear();
+        // Rastro de esteira — mais largo, mais contrastado
+        g.fillStyle(0x111100).fillRect(0,0,12,6);       // fundo escuro
+        g.fillStyle(0x554400).fillRect(1,1,10,4);       // terra marrom
+        g.fillStyle(0x887700).fillRect(2,1,3,2);        // detalhe esteira esq
+        g.fillStyle(0x887700).fillRect(7,1,3,2);        // detalhe esteira dir
+        g.generateTexture('track_mark', 12, 6); g.clear();
+        // Parede destrutível — cor diferente (marrom/laranja) para distinguir
+        g.fillStyle(0x3a1a00).fillRect(0,0,40,40);
+        g.fillStyle(0x6b3a00).fillRect(2,2,36,36);
+        g.fillStyle(0x8b5a00).fillRect(4,4,32,32);
+        g.lineStyle(2,0xaa7700,1).strokeRect(2,2,36,36);
+        // Rachaduras pixel art
+        g.fillStyle(0x1a0a00).fillRect(10,5,2,15).fillRect(25,15,2,12).fillRect(5,20,12,2).fillRect(22,8,8,2);
+        g.generateTexture('wall_dest', 40, 40); g.clear();
+        // Parede destrutível danificada (metade da vida)
+        g.fillStyle(0x3a1a00).fillRect(0,0,40,40);
+        g.fillStyle(0x5a3000).fillRect(2,2,36,36);
+        g.fillStyle(0x1a0a00).fillRect(8,0,4,20).fillRect(0,15,20,4).fillRect(24,5,4,25).fillRect(20,28,20,4).fillRect(15,10,6,6);
+        g.generateTexture('wall_dest_dmg', 40, 40); g.clear();
+
+        // Partícula de explosão (quadrada)
+        g.fillStyle(0xffffff).fillRect(0,0,4,4); g.generateTexture('flare',4,4); g.clear();
+        g.fillStyle(0x555555).fillRect(0,0,6,6); g.generateTexture('smoke',6,6); g.clear();
+
+        // Partícula exclusiva colisão bala vs bala (pixel cross)
+        g.fillStyle(0xffdd00).fillRect(2,0,4,8);   // vertical
+        g.fillStyle(0xffdd00).fillRect(0,2,8,4);   // horizontal
+        g.fillStyle(0xffffff).fillRect(3,3,2,2);   // centro branco
+        g.generateTexture('bullet_clash',8,8); g.clear();
+
+        // Coração pixel art
+        drawPixelSprite(g, HEART_MAP, HEART_COLORS, 3, 0, 0);
+        g.generateTexture('heart', 24, 24); g.clear();
+
+        // POWER-UP: Tiro Triplo
+        drawPixelSprite(g, POWERUP_TRIPLE_SHOT, POWERUP_TRIPLE_C, 4, 0, 0);
+        g.generateTexture('powerup_triple', 36, 36); g.clear();
+
+        // Escudo pixel art — azul brilhante
+        g.fillStyle(0x0044cc).fillRect(2,0,14,10);   // topo escudo
+        g.fillStyle(0x0044cc).fillRect(0,2,18,12);   // corpo
+        g.fillStyle(0x0044cc).fillRect(3,14,12,6);   // base afunilada
+        g.fillStyle(0x0044cc).fillRect(6,20,6,4);
+        g.fillStyle(0x2266ff).fillRect(4,2,10,8);    // brilho interno
+        g.fillStyle(0x88aaff).fillRect(5,3,4,4);     // reflexo
+        g.fillStyle(0xffffff).fillRect(6,4,2,2);     // ponto de luz
+        g.generateTexture('shield_pickup', 18, 24); g.clear();
+
+        // Cápsula pixel art (retangular)
+        g.fillStyle(0x7a5c00).fillRect(0,0,4,10);   // base
+        g.fillStyle(0xd4a017).fillRect(0,0,3,9);    // corpo
+        g.fillStyle(0xffd700).fillRect(0,0,3,3);    // boca brilhante
+        g.fillStyle(0xf5c842).fillRect(1,3,1,4);    // reflexo
+        g.generateTexture('casing', 4, 10); g.clear();
+
+        // ── Gerador de labirinto (Iterative Backtracker + salas + corredores) ──
+        maze = this.physics.add.staticGroup();
+        destructibleWalls = this.physics.add.staticGroup();
+
+        const TILE = 40;
+        const cols = Math.floor(WW / TILE);
+        const rows = Math.floor(WH / TILE);
+
+        // Grid: 0=corredor, 1=parede solida, 2=destrutivel
+        const grid = Array.from({length: rows}, () => new Uint8Array(cols).fill(1));
+
+        // Iterative Backtracker — sem recursao, usa pilha explícita
+        const mCols = Math.floor((cols - 1) / 2);
+        const mRows = Math.floor((rows - 1) / 2);
+        const visited = Array.from({length: mRows}, () => new Uint8Array(mCols));
+
+        const stack = [[0, 0]];
+        visited[0][0] = 1;
+        grid[1][1] = 0;
+
+        while (stack.length > 0) {
+            const [cr, cc] = stack[stack.length - 1];
+            // Coleta vizinhos nao visitados
+            const neighbors = [];
+            for (const [dr, dc] of [[0,1],[0,-1],[1,0],[-1,0]]) {
+                const nr = cr+dr, nc = cc+dc;
+                if (nr>=0 && nr<mRows && nc>=0 && nc<mCols && !visited[nr][nc])
+                    neighbors.push([nr, nc, dr, dc]);
+            }
+            if (neighbors.length === 0) {
+                stack.pop();
+            } else {
+                const [nr, nc, dr, dc] = neighbors[Math.floor(Math.random()*neighbors.length)];
+                visited[nr][nc] = 1;
+                grid[nr*2+1][nc*2+1] = 0;         // abre celula destino
+                grid[cr*2+1+dr][cc*2+1+dc] = 0;   // abre parede entre elas
+                stack.push([nr, nc]);
+            }
+        }
+
+        // Salas abertas aleatorias
+        const numRooms = 14;
+        for (let i = 0; i < numRooms; i++) {
+            const rw = Phaser.Math.Between(3, 7);
+            const rh = Phaser.Math.Between(3, 7);
+            const rx = Phaser.Math.Between(2, cols - rw - 2);
+            const ry = Phaser.Math.Between(2, rows - rh - 2);
+            for (let dr = 0; dr < rh; dr++)
+                for (let dc = 0; dc < rw; dc++)
+                    grid[ry+dr][rx+dc] = 0;
+        }
+
+        // Corredores extras para dar mais abertura
+        const numCorridors = Math.floor((mCols + mRows) * 0.6);
+        for (let i = 0; i < numCorridors; i++) {
+            const horiz = Math.random() > 0.5;
+            const len   = Phaser.Math.Between(6, 18);
+            const baseR = Phaser.Math.Between(1, rows-2);
+            const baseC = Phaser.Math.Between(1, cols-2);
+            for (let j = 0; j < len; j++) {
+                const tr = horiz ? baseR : Math.min(baseR+j, rows-2);
+                const tc = horiz ? Math.min(baseC+j, cols-2) : baseC;
+                grid[tr][tc] = 0;
+            }
+        }
+
+        // Bordas sempre solidas
+        for (let c = 0; c < cols; c++) { grid[0][c] = 1; grid[rows-1][c] = 1; }
+        for (let r = 0; r < rows; r++) { grid[r][0] = 1; grid[r][cols-1] = 1; }
+
+        // Zona segura no spawn do player
+        for (let r = 1; r <= 7; r++) for (let c = 1; c <= 7; c++) grid[r][c] = 0;
+
+        // Paredes destrutíveis (20% das paredes internas)
+        for (let r = 1; r < rows-1; r++)
+            for (let c = 1; c < cols-1; c++)
+                if (grid[r][c] === 1 && Math.random() < 0.20) grid[r][c] = 2;
+
+        // Instancia tiles no Phaser
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                const wx = c*TILE + TILE/2, wy = r*TILE + TILE/2;
+                if (grid[r][c] === 1) {
+                    maze.create(wx, wy, 'wall');
+                } else if (grid[r][c] === 2) {
+                    const dw = destructibleWalls.create(wx, wy, 'wall_dest');
+                    dw.hp = 2;
+                }
+            }
+        }
+
+        // ── Partículas ────────────────────────────────────────────────────
+        particleManager = this.add.particles(0, 0, 'flare', { speed: 80, scale: { start: 1, end: 0 }, lifespan: 350, blendMode: 'ADD', emitting: false });
+        smokeManager    = this.add.particles(0, 0, 'smoke', { speed: { min: 15, max: 50 }, scale: { start: 1, end: 2.5 }, alpha: { start: 0.7, end: 0 }, lifespan: { min: 400, max: 800 }, emitting: false });
+        clashManager    = this.add.particles(0, 0, 'bullet_clash', { speed: { min: 60, max: 180 }, scale: { start: 1.2, end: 0 }, alpha: { start: 1, end: 0 }, lifespan: { min: 250, max: 450 }, rotate: { min: 0, max: 360 }, blendMode: 'ADD', emitting: false });
+
+        // ── Entidades ─────────────────────────────────────────────────────
+        player        = this.physics.add.sprite(120, 120, 'tank_p').setCollideWorldBounds(true).setDrag(0.9).setDepth(1.3).setScale(0.90625);
+        bullets       = this.physics.add.group();
+        enemyBullets  = this.physics.add.group();
+        enemies       = this.physics.add.group();
+        powerups      = this.physics.add.group();
+        casingGroup   = this.add.group();
+
+        // 3 corações simultâneos
+        heartPickups = [];
+        for (let i = 0; i < 3; i++) {
+            const h = this.physics.add.sprite(-300 - i*50, -100, 'heart').setVisible(false);
+            heartPickups.push(h);
+            this.physics.add.overlap(player, h, () => {
+                if (!h.visible) return;
+                if (health < 3) { health++; healthText.setText('HP:' + health + '/3'); }
+                h.setVisible(false).setPosition(-300 - i*50, -100);
+                this.time.delayedCall(6000, () => spawnPickup.call(this, h, 'heart'), []);
+            });
+        }
+
+        // 3 escudos simultâneos
+        shieldPickups = [];
+        for (let i = 0; i < 3; i++) {
+            const s = this.physics.add.sprite(-500 - i*50, -100, 'shield_pickup').setVisible(false);
+            shieldPickups.push(s);
+            this.physics.add.overlap(player, s, () => {
+                if (!s.visible) return;
+                if (!playerShield) {
+                    playerShield = true;
+                    shieldText.setVisible(true);
+                    // pulso visual no HUD
+                    this.tweens.add({ targets: shieldText, scaleX: 1.4, scaleY: 1.4, duration: 200, yoyo: true });
+                }
+                s.setVisible(false).setPosition(-500 - i*50, -100);
+                this.time.delayedCall(5000, () => spawnPickup.call(this, s, 'shield_pickup'), []);
+            });
+        }
+
+        // Câmera segue o jogador no mundo 3x
+        this.cameras.main.startFollow(player, true, 0.1, 0.1);
+
+        // ── HUD pixel art — fixo na câmera ────────────────────────────────
+        g.fillStyle(0x000000, 0.75).fillRect(0, 0, 220, 80);
+        g.lineStyle(2, 0x00ff44, 1).strokeRect(0,0,220,80);
+        g.generateTexture('hud_bg', 220, 80); g.clear();
+        this.add.image(10, 10, 'hud_bg').setOrigin(0).setDepth(200).setScrollFactor(0);
+
+        scoreText  = this.add.text(20, 20, 'KILLS:0', {
+            fontFamily: '"Press Start 2P"', fontSize: '10px', fill: '#00ff44'
+        }).setDepth(201).setScrollFactor(0);
+        abilityText = this.add.text(20, 36, 'ABL:0', {
+            fontFamily: '"Press Start 2P"', fontSize: '10px', fill: '#ffcc00'
+        }).setDepth(201).setScrollFactor(0);
+        healthText = this.add.text(20, 52, 'HP:3/3', {
+            fontFamily: '"Press Start 2P"', fontSize: '10px', fill: '#ff5555'
+        }).setDepth(201).setScrollFactor(0);
+        enemyText  = this.add.text(20, 68, 'INI:0/65', {
+            fontFamily: '"Press Start 2P"', fontSize: '10px', fill: '#ff8800'
+        }).setDepth(201).setScrollFactor(0);
+        shieldText = this.add.text(160, 52, '🛡', {
+            fontSize: '16px'
+        }).setDepth(201).setScrollFactor(0).setVisible(false);
+
+        // Badge de modo
+        this.add.text(w - 12, 12, difficulty.toUpperCase(), {
+            fontFamily: '"Press Start 2P"', fontSize: '8px', fill: '#aaffaa',
+            backgroundColor: '#001100', padding: { x: 5, y: 3 }
+        }).setOrigin(1, 0).setDepth(200).setScrollFactor(0);
+
+        const pauseBtn = this.add.text(w - 12, 28, 'MENU', {
+            fontFamily: '"Press Start 2P"', fontSize: '8px', fill: '#aaffaa',
+            backgroundColor: '#001100', padding: { x: 5, y: 3 }
+        }).setOrigin(1, 0).setDepth(200).setInteractive().setScrollFactor(0);
+        pauseBtn.on('pointerdown', () => {
+            if (score > highScore) { highScore = score; localStorage.setItem('tankHighScore', highScore); }
+            if (this.bgMusic && this.bgMusic.isPlaying) this.bgMusic.stop();
+            this.scene.start('MenuScene');
+        });
+
+        // ── Joystick pixel art — fixo na câmera ──────────────────────────
+        joyBase  = this.add.rectangle(0, 0, 110, 110, 0x000000, 0.3).setVisible(false).setDepth(200).setScrollFactor(0);
+        joyThumb = this.add.rectangle(0, 0, 48, 48, 0x00ff44, 0.5).setVisible(false).setDepth(201).setScrollFactor(0);
+
+        // Borda joystick
+        const joyBorderG = this.make.graphics({x:0,y:0,add:false});
+        joyBorderG.lineStyle(2, 0x00aa33, 1).strokeRect(0,0,110,110);
+        joyBorderG.generateTexture('joy_border', 110, 110); joyBorderG.destroy();
+
+        // ── Botão FOGO pixel art ──────────────────────────────────────────
+        const btnX = w - 90, btnY = h - 90;
+
+        g.fillStyle(0x880000).fillRect(0,4,90,86).fillStyle(0xff2222).fillRect(0,0,90,86);
+        g.fillStyle(0xff8888,0.3).fillRect(4,4,82,40);
+        g.lineStyle(2,0xff6666,1).strokeRect(0,0,90,86);
+        g.generateTexture('fire_btn', 90, 90); g.clear();
+
+        g.fillStyle(0xcc0000).fillRect(0,0,90,86).lineStyle(2,0xff0000,1).strokeRect(0,0,90,86);
+        g.generateTexture('fire_btn_down', 90, 86); g.clear();
+
+        fireBtn = this.add.image(btnX, btnY, 'fire_btn').setInteractive().setDepth(200).setScrollFactor(0);
+        this.add.text(btnX, btnY, 'FOGO\nBB', {
+            fontFamily: '"Press Start 2P"', fontSize: '10px', fill: '#fff', align: 'center'
+        }).setOrigin(0.5).setDepth(201).setScrollFactor(0);
+
+        // ── Botão POEIRA — acima do botão de fogo ─────────────────────────
+        const poeiraBtnY = btnY - 105;
+        g.fillStyle(0x5a3a00).fillRect(0,0,90,86);
+        g.fillStyle(0xcc8800).fillRect(0,0,90,86);
+        g.fillStyle(0xffcc44,0.35).fillRect(4,4,82,40);
+        g.lineStyle(2,0xffaa00,1).strokeRect(0,0,90,86);
+        g.generateTexture('poeira_btn', 90, 86); g.clear();
+        g.fillStyle(0x886600).fillRect(0,0,90,86);
+        g.lineStyle(2,0xffaa00,1).strokeRect(0,0,90,86);
+        g.generateTexture('poeira_btn_off', 90, 86); g.clear();
+
+        poeiraBtn  = this.add.image(btnX, poeiraBtnY, 'poeira_btn_off').setInteractive().setDepth(200).setVisible(false).setScrollFactor(0);
+        poeiraText = this.add.text(btnX, poeiraBtnY, 'POEIRA', {
+            fontFamily: '"Press Start 2P"', fontSize: '9px', fill: '#fff', align: 'center'
+        }).setOrigin(0.5).setDepth(201).setVisible(false).setScrollFactor(0);
+
+        poeiraBtn.on('pointerdown', activatePoeira, this);
+
+        ultBtn  = this.add.rectangle(btnX-130, btnY, 80, 80, 0x0044aa, 0.6).setInteractive().setDepth(200).setVisible(false).setScrollFactor(0);
+        ultText = this.add.text(btnX-130, btnY, 'AURA\n+99', {
+            fontFamily: '"Press Start 2P"', fontSize: '9px', fill: '#fff', align: 'center'
+        }).setOrigin(0.5).setDepth(201).setVisible(false).setScrollFactor(0);
+
+        // Borda ult
+        const ultBorderG = this.make.graphics({x:0,y:0,add:false});
+        ultBorderG.lineStyle(2, 0x00aaff, 1).strokeRect(0,0,80,80);
+        ultBorderG.generateTexture('ult_border', 80, 80); ultBorderG.destroy();
+
+        ultBtn.on('pointerdown', activateUltimate, this);
+        fireBtn.on('pointerdown', () => {
+            fireBtn.setTexture('fire_btn_down');
+            if (player.active && player.visible) firePlayerBullet.call(this);
+        });
+        fireBtn.on('pointerup', () => fireBtn.setTexture('fire_btn'));
+
+        this.input.on('pointerdown', (p) => {
+            if (p.x < w/2) {
+                joyActivePointer = p;
+                joyBase.setPosition(p.x, p.y).setVisible(true);
+                joyThumb.setPosition(p.x, p.y).setVisible(true);
+            }
+        });
+        this.input.on('pointermove', (p) => {
+            if (p === joyActivePointer) {
+                let a = Phaser.Math.Angle.Between(joyBase.x, joyBase.y, p.x, p.y);
+                let d = Math.min(Phaser.Math.Distance.Between(joyBase.x, joyBase.y, p.x, p.y), 55);
+                joyThumb.setPosition(joyBase.x + Math.cos(a)*d, joyBase.y + Math.sin(a)*d);
+                joyVector.set(Math.cos(a)*(d/55), Math.sin(a)*(d/55));
+            }
+        });
+        this.input.on('pointerup', (p) => {
+            if (p === joyActivePointer) {
+                joyActivePointer = null;
+                joyBase.setVisible(false); joyThumb.setVisible(false);
+                joyVector.set(0, 0);
+            }
+        });
+
+        // ── Colisões ──────────────────────────────────────────────────────
+        this.physics.add.collider([player, enemies], maze);
+        this.physics.add.collider(enemyBullets, maze, (b) => b.destroy());
+        this.physics.add.collider(bullets, maze, (b) => { if (!isUltActive) b.destroy(); }, () => !isUltActive);
+
+        // ── Paredes destrutíveis ───────────────────────────────────────────
+        this.physics.add.collider([player, enemies], destructibleWalls);
+        this.physics.add.collider(enemyBullets, destructibleWalls, (b, dw) => {
+            b.destroy();
+            dw.hp--;
+            if (dw.hp <= 0) { particleManager.emitParticleAt(dw.x, dw.y, 15); dw.destroy(); }
+            else dw.setTexture('wall_dest_dmg');
+        });
+        this.physics.add.collider(bullets, destructibleWalls, (b, dw) => {
+            if (!isUltActive) b.destroy();
+            dw.hp--;
+            if (dw.hp <= 0) {
+                particleManager.emitParticleAt(dw.x, dw.y, 20);
+                smokeManager.emitParticleAt(dw.x, dw.y, 8, { tint:0x8b5a00, scale:{start:1,end:3}, lifespan:600 });
+                dw.destroy();
+            } else dw.setTexture('wall_dest_dmg');
+        });
+
+        // ── Colisão bala do jogador vs bala inimiga ────────────────────────
+        this.physics.add.overlap(bullets, enemyBullets, (pb, eb) => {
+            const cx = (pb.x + eb.x) / 2;
+            const cy = (pb.y + eb.y) / 2;
+
+            // Partículas cross coloridas
+            clashManager.emitParticleAt(cx, cy, 18, {
+                tint: [0xffdd00, 0xff8800, 0xffffff, 0x00ffff],
+                speed: { min: 80, max: 220 },
+                scale: { start: 1.4, end: 0 },
+                alpha: { start: 1, end: 0 },
+                lifespan: { min: 200, max: 400 }
+            });
+            // Flash branco central
+            particleManager.emitParticleAt(cx, cy, 10, {
+                tint: 0xffffff,
+                speed: { min: 20, max: 60 },
+                scale: { start: 1.8, end: 0 },
+                alpha: { start: 1, end: 0 },
+                lifespan: 180
+            });
+            // Fumaça residual
+            smokeManager.emitParticleAt(cx, cy, 6, {
+                tint: 0xaaaaaa,
+                speed: { min: 10, max: 40 },
+                scale: { start: 0.8, end: 2 },
+                alpha: { start: 0.6, end: 0 },
+                lifespan: 350
+            });
+
+            // Shake leve de câmera
+            this.cameras.main.shake(80, 0.008);
+
+            // Som de colisão (usa sfx setting)
+            if (soundSettings.sfx) this.sound.play('som_explosao', { volume: 0.25, detune: 800 });
+
+            pb.destroy();
+            eb.destroy();
+        });
+
+        this.physics.add.overlap(bullets, enemies, (b, e) => {
+            this.sound.play('som_explosao', { volume: soundSettings.sfx ? 0.6 : 0 });
+            this.cameras.main.shake(150, 0.02);
+            particleManager.emitParticleAt(e.x, e.y, 20);
+            
+            // GERAR POWER-UP (20% de chance)
+            if (Math.random() < 0.20) {
+                const pu = powerups.create(e.x, e.y, 'powerup_triple');
+                if (pu) {
+                    pu.setBounce(0.3).setCollideWorldBounds(true);
+                    pu.setVelocity(Phaser.Math.Between(-100, 100), Phaser.Math.Between(-100, 100));
+                    
+                    // Animação: Pulsação + Rotação
+                    this.tweens.add({
+                        targets: pu,
+                        scaleX: { from: 0.8, to: 1.3 },
+                        scaleY: { from: 0.8, to: 1.3 },
+                        duration: 500,
+                        yoyo: true,
+                        repeat: -1,
+                        ease: 'Sine.easeInOut'
+                    });
+                    this.tweens.add({
+                        targets: pu,
+                        rotation: { from: 0, to: Math.PI * 2 },
+                        duration: 3000,
+                        repeat: -1
+                    });
+                    
+                    // Desaparecer após 10 segundos
+                    this.time.delayedCall(10000, () => { if (pu && pu.active) pu.destroy(); });
+                }
+            }
+            
+            b.destroy(); e.destroy();
+            score += 10; scoreText.setText('KILLS:' + score);
+            abilityPoints += 10; abilityText.setText('ABL:' + abilityPoints);
+            checkUltStatus();
+            this.time.delayedCall(2000, () => { if (enemies.countActive(true) < 65) spawnEnemy.call(this); });
+        });
+
+        this.physics.add.overlap(enemyBullets, player, (p, b) => {
+            if (!isInvulnerable) { b.destroy(); takeDamage.call(this); }
+        });
+        
+        // COLISÃO COM POWER-UPS
+        this.physics.add.overlap(player, powerups, (p, pu) => {
+            console.log('🎉 TIRO TRIPLO ATIVADO!');
+            tripleActive = true;
+            tripleTime = 0;
+            this.sound.play('som_explosao', { volume: soundSettings.sfx ? 0.3 : 0, detune: -600 });
+            pu.destroy();
+        });
+        
+        // Spawn inicial de pickups
+        for (let i = 0; i < 22; i++) spawnEnemy.call(this);
+
+        // Spawn contínuo a cada 3s até limite de 35
+        this.time.addEvent({ delay: 2000, loop: true, callback: () => {
+            if (enemies.countActive(true) < 65) spawnEnemy.call(this);
+        }});
+
+        // Spawn inicial dos pickups
+        heartPickups.forEach(h => spawnPickup.call(this, h, 'heart'));
+        shieldPickups.forEach(s => spawnPickup.call(this, s, 'shield_pickup'));
+    }
+
+    update() {
+        if (!player.active || !player.visible) return;
+        player.setVelocity(joyVector.x * 210, joyVector.y * 210);
+        if (joyVector.lengthSq() > 0) player.setRotation(joyVector.angle() + Math.PI/2);
+
+        // ═══ ATUALIZAR POWER-UP DE TIRO TRIPLO ═══
+        if (tripleActive) {
+            tripleTime += 16; // ~16ms por frame
+            if (tripleTime >= tripleMaxTime) {
+                tripleActive = false;
+                console.log('❌ Tiro triplo expirou!');
+            }
+        }
+
+        // Atualiza contador de inimigos
+        enemyText.setText('INI:' + enemies.countActive(true) + '/65');
+
+        // ── Rastro de esteira do player ───────────────────────────────────
+        if (joyVector.lengthSq() > 0.1) {
+            const now = this.time.now;
+            if (!player._lastTrack || now - player._lastTrack > 50) {
+                player._lastTrack = now;
+                // moveAngle: direção real do movimento
+                // backAngle: oposto ao movimento (atrás do tanque)
+                // lateralAngle: player.rotation já é moveAngle+PI/2, perpendicular ao corpo
+                const moveAngle = joyVector.angle();
+                const backAngle = moveAngle + Math.PI;
+                const lateralAngle = player.rotation; // = moveAngle + PI/2
+                [-1, 1].forEach(side => {
+                    const tx = player.x + Math.cos(backAngle) * 15 + Math.cos(lateralAngle) * side * 8;
+                    const ty = player.y + Math.sin(backAngle) * 15 + Math.sin(lateralAngle) * side * 8;
+                    const mark = this.add.image(tx, ty, 'track_mark')
+                        .setRotation(player.rotation).setAlpha(0.65).setDepth(1);
+                    this.tweens.add({ targets: mark, alpha: 0, duration: 1200, ease: 'Sine.easeIn', onComplete: () => mark.destroy() });
+                });
+            }
+
+        }
+        bullets.children.iterate(b => {
+            if (b && b.active) {
+                smokeManager.emitParticleAt(b.x, b.y, 2, {
+                    tint: isUltActive ? 0x00ccff : 0x888888,
+                    scale: { start: 0.5, end: 1.5 }, alpha: { start: 0.5, end: 0 }, lifespan: 200
+                });
+            }
+        });
+
+        enemyBullets.children.iterate(b => {
+            if (b && b.active) {
+                smokeManager.emitParticleAt(b.x, b.y, 1, {
+                    tint: 0xff4400, scale: { start: 0.2, end: 0.6 }, alpha: { start: 0.25, end: 0 }, lifespan: 100
+                });
+            }
+        });
+
+        enemies.children.iterate(e => {
+            if (!e || !e.active) return;
+            const dist  = Phaser.Math.Distance.Between(e.x, e.y, player.x, player.y);
+            const angle = Phaser.Math.Angle.Between(e.x, e.y, player.x, player.y);
+            const baseSpeed = difficulty === 'Facil' ? 50 : (difficulty === 'Dificil' ? 130 : 80);
+            const now = this.time.now;
+
+            // ── Calcula posição média dos aliados (para flanqueamento) ─────
+            let allyCount = 0, allyAvgX = 0, allyAvgY = 0;
+            enemies.children.iterate(other => {
+                if (!other || !other.active || other === e) return;
+                allyAvgX += other.x; allyAvgY += other.y; allyCount++;
+            });
+            if (allyCount > 0) { allyAvgX /= allyCount; allyAvgY /= allyCount; }
+
+            // Lado de flanqueamento: o inimigo tenta ficar no lado oposto ao centro dos aliados
+            const flankDir = (allyCount > 0)
+                ? Math.sign(Math.sin(angle - Phaser.Math.Angle.Between(allyAvgX, allyAvgY, player.x, player.y)) + 0.001)
+                : (e._flankSide || (e._flankSide = Math.random() > 0.5 ? 1 : -1));
+
+            // ── Sniper ────────────────────────────────────────────────────
+            if (e.enemyType === 'sniper') {
+                const sniperSpeed = difficulty === 'Facil' ? 35 : (difficulty === 'Dificil' ? 70 : 50);
+
+                // Tenta ficar atrás de paredes para dar cobertura
+                if (dist < 180) {
+                    // Foge em direção oposta ao player
+                    this.physics.velocityFromRotation(angle + Math.PI, sniperSpeed * 1.2, e.body.velocity);
+                } else if (dist > 420) {
+                    // Reposiciona em flanco
+                    this.physics.velocityFromRotation(angle + flankDir * Math.PI * 0.35, sniperSpeed * 0.7, e.body.velocity);
+                } else {
+                    // Strafe no ângulo de flanqueamento para dificultar mira do player
+                    const strafeAngle = angle + Math.PI/2 * flankDir;
+                    this.physics.velocityFromRotation(strafeAngle, sniperSpeed * 0.5, e.body.velocity);
+                    // Muda lado de strafe periodicamente
+                    if (!e._nextFlankSwitch || now > e._nextFlankSwitch) {
+                        e._flankSide = -e._flankSide;
+                        e._nextFlankSwitch = now + Phaser.Math.Between(1800, 3200);
+                    }
+                }
+                e.setRotation(angle + Math.PI/2);
+                if (now > (e.lastFired || 0)) {
+                    fireSniperBullet.call(this, e);
+                    const rate = difficulty === 'Facil' ? 4000 : (difficulty === 'Dificil' ? 2000 : 3000);
+                    e.lastFired = now + rate;
+                    this.tweens.add({ targets: e, scaleX: 1.3, scaleY: 1.3, duration: 300, yoyo: true });
+                }
+                return;
+            }
+
+            // ── Kamikaze ──────────────────────────────────────────────────
+            if (e.enemyType === 'kamikaze') {
+                const kamiSpeed = baseSpeed * 2.5;
+
+                // Kamikaze espera aliados chegarem perto antes de dar rush (comportamento de manada)
+                const alliesNear = allyCount > 0 &&
+                    Phaser.Math.Distance.Between(allyAvgX, allyAvgY, player.x, player.y) < 350;
+
+                if (!alliesNear && dist > 250 && allyCount >= 2) {
+                    // Aguarda aliados: circula ao redor do player à distância
+                    const circleAngle = angle + Math.PI * 0.6 * flankDir;
+                    this.physics.velocityFromRotation(circleAngle, baseSpeed * 1.4, e.body.velocity);
+                } else {
+                    // Rush direto
+                    this.physics.velocityFromRotation(angle, kamiSpeed, e.body.velocity);
+                }
+                e.setRotation(angle + Math.PI/2);
+
+                // Rastro de fogo
+                if (!e._lastTrack || now - e._lastTrack > 55) {
+                    e._lastTrack = now;
+                    smokeManager.emitParticleAt(e.x, e.y, 3, {
+                        tint: [0xff4400, 0xff8800, 0xffdd00],
+                        speed: { min:10, max:40 }, scale: { start:0.8, end:2 },
+                        alpha: { start:0.8, end:0 }, lifespan: 400
+                    });
+                }
+                if (dist < 40 && !e._exploding) {
+                    e._exploding = true;
+                    kamikazeExplode.call(this, e);
+                }
+                return;
+            }
+
+            // ── Inimigos normais (e1/e2/e3) — IA estratégica ─────────────
+            let speed = e.eliteLevel === 3 ? baseSpeed+60 : (e.eliteLevel === 2 ? baseSpeed+30 : baseSpeed);
+
+            // Estado da IA: 'chase', 'flank', 'ambush', 'retreat'
+            if (!e._aiState) {
+                e._aiState = 'chase';
+                e._aiTimer = now + Phaser.Math.Between(2000, 4000);
+                e._flankSide = flankDir;
+            }
+
+            // Troca de estado periódica
+            if (now > e._aiTimer) {
+                const roll = Math.random();
+                if (dist < 120) {
+                    e._aiState = 'retreat'; // player muito perto: recua
+                } else if (roll < 0.30) {
+                    e._aiState = 'flank';   // tenta flanquear
+                    e._flankSide = Math.random() > 0.5 ? 1 : -1;
+                } else if (roll < 0.50 && allyCount >= 2) {
+                    e._aiState = 'ambush';  // se tem aliados, tenta cercar
+                } else {
+                    e._aiState = 'chase';
+                }
+                e._aiTimer = now + Phaser.Math.Between(1500, 3500);
+            }
+
+            // Executa o estado
+            switch (e._aiState) {
+                case 'chase':
+                    // Perseguição direta, leve desvio para não ir em linha reta
+                    if (!e._wobble || now > e._wobble.next) {
+                        e._wobble = { offset: Phaser.Math.FloatBetween(-0.3, 0.3), next: now + 600 };
+                    }
+                    this.physics.velocityFromRotation(angle + e._wobble.offset, speed, e.body.velocity);
+                    break;
+
+                case 'flank':
+                    // Circula pelo player tentando chegar pelo lado
+                    if (dist > 160) {
+                        const fAngle = angle + Math.PI * 0.45 * e._flankSide;
+                        this.physics.velocityFromRotation(fAngle, speed * 1.1, e.body.velocity);
+                    } else {
+                        // Chegou à posição de flanqueamento — atira e muda para chase
+                        this.physics.velocityFromRotation(angle, speed * 0.5, e.body.velocity);
+                    }
+                    break;
+
+                case 'ambush':
+                    // Move para lado oposto ao centro dos aliados (tenta cercar o player)
+                    if (allyCount > 0) {
+                        const oppositeAngle = Phaser.Math.Angle.Between(player.x, player.y, allyAvgX, allyAvgY) + Math.PI;
+                        if (dist > 150) {
+                            this.physics.velocityFromRotation(oppositeAngle, speed * 0.9, e.body.velocity);
+                        } else {
+                            e.setVelocity(0, 0);
+                        }
+                    } else {
+                        e._aiState = 'chase'; // sem aliados, volta a perseguir
+                    }
+                    break;
+
+                case 'retreat':
+                    // Recua e atira enquanto foge
+                    this.physics.velocityFromRotation(angle + Math.PI, speed * 1.2, e.body.velocity);
+                    break;
+            }
+
+            e.setRotation(angle + Math.PI/2);
+
+            // Cadência de tiro varia por estado
+            if (now > (e.lastFired || 0)) {
+                fireEnemyBullet.call(this, e);
+                let base = difficulty === 'Facil' ? 3000 : (difficulty === 'Dificil' ? 1200 : 2200);
+                let rate = e.eliteLevel === 3 ? base*0.4 : (e.eliteLevel === 2 ? base*0.7 : base);
+                // Atira mais rápido em modo retreat e flank
+                if (e._aiState === 'retreat') rate *= 0.6;
+                if (e._aiState === 'flank' && dist < 180) rate *= 0.7;
+                e.lastFired = now + rate;
+            }
+        });
+
+    }
+}
+
+// ── Globais ──────────────────────────────────────────────────────────────────
+let player, bullets, enemyBullets, enemies, maze, destructibleWalls, particleManager, smokeManager, clashManager, heartPickups, shieldPickups, casingGroup;
+let score = 0, abilityPoints = 0, health = 6, scoreText, abilityText, healthText, enemyText, ultBtn, ultText, poeiraBtn, poeiraText, shieldText;
+let tripleActive = false, tripleTime = 0, tripleMaxTime = 10000, powerups;
+let joyBase, joyThumb, joyActivePointer = null, joyVector = new Phaser.Math.Vector2(0, 0);
+let fireBtn, isInvulnerable = false, lastFired = 0;
+let isUltActive = false, ultAvailable = false;
+let poeiraAvailable = false, poeiraUses = 0;
+let playerShield = false;
+const MAX_ENEMIES = 65;
+
+// ── Cápsula ejetada (pixel) ──────────────────────────────────────────────────
+function ejectCasing(scene) {
+    const barrelAngle = player.rotation - Math.PI/2;
+    const ejectAngle  = barrelAngle + Math.PI/2;
+    const spawnX = player.x + Math.cos(ejectAngle) * 12;
+    const spawnY = player.y + Math.sin(ejectAngle) * 12;
+    const ejectSpeed = Phaser.Math.Between(70, 130);
+    const riseAmount = Phaser.Math.Between(15, 35);
+    const spinRad    = Phaser.Math.FloatBetween(6, 14) * (Math.random() > 0.5 ? 1 : -1);
+    const riseDur    = Phaser.Math.Between(100, 180);
+    const fallDur    = Phaser.Math.Between(200, 350);
+    const dx = Math.cos(ejectAngle) * ejectSpeed * ((riseDur+fallDur)/1000);
+    const dy = Math.sin(ejectAngle) * ejectSpeed * ((riseDur+fallDur)/1000);
+    const peakX = spawnX + dx*0.4;
+    const peakY = spawnY + dy*0.4 - riseAmount;
+    const landX = spawnX + dx, landY = spawnY + dy;
+    const casingTint = isUltActive ? 0x00eeff : 0xd4a017;
+
+    const casing = scene.add.image(spawnX, spawnY, 'casing').setOrigin(0.5).setRotation(player.rotation).setDepth(2).setTint(casingTint);
+    casingGroup.add(casing);
+
+    scene.tweens.add({ targets: casing, x: peakX, y: peakY, rotation: casing.rotation + spinRad*(riseDur/1000), scaleX: 1.1, scaleY: 0.9, duration: riseDur, ease: 'Sine.easeOut',
+        onComplete: () => {
+            scene.tweens.add({ targets: casing, x: landX, y: landY, rotation: casing.rotation + spinRad*(fallDur/1000), scaleX: 0.9, scaleY: 0.9, duration: fallDur, ease: 'Bounce.easeOut',
+                onComplete: () => {
+                    scene.tweens.add({ targets: casing, x: landX + Math.cos(ejectAngle)*Phaser.Math.Between(3,10), y: landY + Math.sin(ejectAngle)*Phaser.Math.Between(2,6), duration: 120, ease: 'Quad.easeOut',
+                        onComplete: () => {
+                            scene.tweens.add({ targets: casing, alpha: 0, scaleX: 0.6, scaleY: 0.6, duration: 700, delay: 500, onComplete: () => casing.destroy() });
+                        }
+                    });
+                }
+            });
+        }
+    });
+}
+
+function spawnPickup(sprite, texture) {
+    const WW = this.physics.world.bounds.width;
+    const WH = this.physics.world.bounds.height;
+    sprite.setTexture(texture)
+          .setPosition(Phaser.Math.Between(120, WW-120), Phaser.Math.Between(120, WH-120))
+          .setVisible(true);
+}
+
+function checkUltStatus() {
+    if (abilityPoints >= 80 && poeiraUses < 5 && !poeiraAvailable) {
+        poeiraAvailable = true;
+        poeiraBtn.setVisible(true).setTexture('poeira_btn').setAlpha(1);
+        poeiraText.setVisible(true).setText('POEIRA\n' + (5 - poeiraUses) + '/5');
+    }
+    if (abilityPoints >= 100 && !ultAvailable && !isUltActive) {
+        ultAvailable = true; ultBtn.setVisible(true).setAlpha(1); ultText.setVisible(true).setText('AURA\n+99!');
+    }
+}
+
+function activatePoeira() {
+    if (!poeiraAvailable || poeiraUses >= 5) return;
+    poeiraAvailable = false;
+    poeiraUses++;
+    abilityPoints = Math.max(0, abilityPoints - 80);
+    abilityText.setText('ABL:' + abilityPoints);
+
+    const remaining = 5 - poeiraUses;
+    if (remaining > 0) {
+        poeiraBtn.setTexture('poeira_btn_off').setAlpha(0.5);
+        poeiraText.setText('...');
+    } else {
+        poeiraBtn.setTexture('poeira_btn_off').setAlpha(0.3);
+        poeiraText.setText('VAZIO');
+    }
+
+    const scene = poeiraBtn.scene;
+    const allEnemies = enemies.getChildren().filter(e => e && e.active);
+    const killCount  = Math.ceil(allEnemies.length * 0.8);
+    const toKill     = Phaser.Utils.Array.Shuffle(allEnemies).slice(0, killCount);
+
+    scene.cameras.main.flash(300, 180, 120, 40, false);
+    scene.cameras.main.shake(500, 0.015);
+
+    toKill.forEach((e, i) => {
+        scene.time.delayedCall(i * 120, () => {
+            if (!e || !e.active) return;
+            smokeManager.emitParticleAt(e.x, e.y, 20, {
+                tint: [0xcc8800, 0xffcc44, 0xaa6600, 0x886600],
+                speed: { min: 60, max: 200 }, scale: { start: 1.5, end: 4 },
+                alpha: { start: 0.9, end: 0 }, lifespan: { min: 500, max: 900 }
+            });
+            particleManager.emitParticleAt(e.x, e.y, 12, {
+                tint: [0xffcc44, 0xffffff, 0xff8800],
+                speed: { min: 80, max: 250 }, scale: { start: 1.2, end: 0 },
+                alpha: { start: 1, end: 0 }, lifespan: 400, blendMode: 'ADD'
+            });
+            if (soundSettings.sfx) scene.sound.play('som_explosao', { volume: 0.3, detune: Phaser.Math.Between(-600, 200) });
+            score += 10; scoreText.setText('KILLS:' + score);
+            e.destroy();
+        });
+    });
+
+    // Após animação, atualiza botão
+    scene.time.delayedCall(toKill.length * 120 + 400, () => {
+        if (remaining > 0) {
+            poeiraBtn.setTexture('poeira_btn').setAlpha(1);
+            poeiraText.setText('POEIRA\n' + remaining + '/5');
+        } else {
+            poeiraBtn.setVisible(false);
+            poeiraText.setVisible(false);
+        }
+    });
+}
+
+function activateUltimate() {
+    if (!ultAvailable) return;
+    ultAvailable = false; isUltActive = true; ultBtn.setAlpha(0.3);
+    abilityPoints = Math.max(0, abilityPoints - 100);
+    abilityText.setText('ABL:' + abilityPoints);
+    let timeLeft = 7;
+    const timer = this.time.addEvent({ delay: 1000, repeat: 7, callback: () => {
+        ultText.setText(timeLeft + 'S');
+        if (timeLeft <= 0) {
+            isUltActive = false; ultBtn.setVisible(false); ultText.setVisible(false);
+            timer.remove();
+        }
+        timeLeft--;
+    }});
+}
+
+function firePlayerBullet() {
+    if (this.time.now < lastFired) return;
+    lastFired = this.time.now + 90;
+    this.sound.play('som_tiro', { volume: soundSettings.sfx ? 0.4 : 0 });
+    ejectCasing(this);
+    
+    const texture = isUltActive ? 'bullet_ult' : 'bullet_p';
+    const baseAngle = player.rotation - Math.PI/2;
+    
+    // Se tiro triplo ativo, dispara 3 balas em leque
+    if (tripleActive) {
+        const spreadAngle = 15 * Math.PI / 180; // 15 graus entre cada tiro
+        const angles = [
+            baseAngle - spreadAngle,
+            baseAngle,
+            baseAngle + spreadAngle
+        ];
+        
+        angles.forEach(angle => {
+            let b = bullets.create(player.x, player.y, texture);
+            if (b) {
+                this.physics.velocityFromRotation(angle, 550, b.body.velocity);
+                smokeManager.emitParticleAt(player.x, player.y, 8, {
+                    speed: { min: 30, max: 100 }, scale: { start: 1.2, end: 3.5 },
+                    tint: isUltActive ? 0x00ccff : 0xff7700, alpha: { start: 0.7, end: 0 }
+                });
+                this.time.delayedCall(isUltActive ? 3000 : 1200, () => { if (b && b.active) b.destroy(); });
+            }
+        });
+    } else {
+        // Disparo normal (uma bala)
+        let b = bullets.create(player.x, player.y, texture);
+        if (b) {
+            this.physics.velocityFromRotation(baseAngle, 550, b.body.velocity);
+            smokeManager.emitParticleAt(player.x, player.y, 15, {
+                speed: { min: 30, max: 100 }, scale: { start: 1.2, end: 3.5 },
+                tint: isUltActive ? 0x00ccff : 0x888888, alpha: { start: 0.7, end: 0 }
+            });
+            this.time.delayedCall(isUltActive ? 3000 : 1200, () => { if (b && b.active) b.destroy(); });
+        }
+    }
+}
+
+function fireSniperBullet(enemy) {
+    if (!player.visible) return;
+    const b = enemyBullets.create(enemy.x, enemy.y, 'bullet_sniper');
+    if (b) {
+        const a = Phaser.Math.Angle.Between(enemy.x, enemy.y, player.x, player.y);
+        this.physics.velocityFromRotation(a, 950, b.body.velocity);
+        b.setRotation(a + Math.PI/2).setScale(1.4);
+        // Ondas de choque na boca do cano
+        particleManager.emitParticleAt(enemy.x, enemy.y, 18, {
+            tint: [0x0066ff, 0x44aaff, 0xffffff],
+            speed: {min:60, max:160}, angle: { min: Phaser.Math.RadToDeg(a)-30, max: Phaser.Math.RadToDeg(a)+30 },
+            scale: {start:1.5, end:0}, alpha: {start:1, end:0}, lifespan: 300, blendMode: 'ADD'
+        });
+        // Rastro contínuo da bala em voo
+        const trailTimer = this.time.addEvent({ delay: 16, loop: true, callback: () => {
+            if (!b || !b.active) { trailTimer.remove(); return; }
+            smokeManager.emitParticleAt(b.x, b.y, 4, {
+                tint: [0x0044ff, 0x88ccff, 0xffffff],
+                speed: {min:5, max:25}, scale: {start:1.2, end:2.5},
+                alpha: {start:0.9, end:0}, lifespan: 250, blendMode: 'ADD'
+            });
+        }});
+        this.time.delayedCall(3000, () => { if (b && b.active) b.destroy(); trailTimer.remove(); });
+    }
+}
+
+function kamikazeExplode(enemy) {
+    // Explosão grande ao contato
+    this.sound.play('som_explosao', { volume: soundSettings.sfx ? 1.0 : 0, detune: -400 });
+    this.cameras.main.shake(400, 0.04);
+    particleManager.emitParticleAt(enemy.x, enemy.y, 40, {
+        tint: [0xff4400, 0xff8800, 0xffff00, 0xffffff],
+        speed: {min:80, max:300}, scale:{start:2,end:0}, alpha:{start:1,end:0}, lifespan:{min:300,max:600}
+    });
+    smokeManager.emitParticleAt(enemy.x, enemy.y, 20, {
+        tint: 0x444444, speed:{min:20,max:80}, scale:{start:2,end:5}, alpha:{start:0.8,end:0}, lifespan:1000
+    });
+    // Dano em área ao player
+    const dist = Phaser.Math.Distance.Between(enemy.x, enemy.y, player.x, player.y);
+    if (dist < 80 && !isInvulnerable) takeDamage.call(this);
+    enemy.destroy();
+}
+
+function fireEnemyBullet(enemy) {
+    if (!player.visible) return;
+    let b = enemyBullets.create(enemy.x, enemy.y, 'bullet_e');
+    if (b) {
+        let a = Phaser.Math.Angle.Between(enemy.x, enemy.y, player.x, player.y);
+        this.physics.velocityFromRotation(a, 280, b.body.velocity);
+        this.time.delayedCall(2000, () => { if (b && b.active) b.destroy(); });
+    }
+}
+
+function takeDamage() {
+    // Escudo absorve 1 tiro
+    if (playerShield) {
+        playerShield = false;
+        shieldText.setVisible(false);
+        particleManager.emitParticleAt(player.x, player.y, 15, {
+            tint: [0x4488ff, 0x88ccff, 0xffffff],
+            speed: { min: 60, max: 180 }, scale: { start: 1, end: 0 },
+            alpha: { start: 1, end: 0 }, lifespan: 350, blendMode: 'ADD'
+        });
+        return;
+    }
+    health--;
+    healthText.setText('HP:' + Math.max(0,health) + '/3');
+    particleManager.emitParticleAt(player.x, player.y, 20);
+    this.cameras.main.shake(250, 0.04);
+    if (health <= 0) {
+        if (score > highScore) { highScore = score; localStorage.setItem('tankHighScore', highScore); }
+        player.setVisible(false);
+        // Tela de game over pixel art
+        const gog = this.make.graphics({x:0,y:0,add:false});
+        gog.fillStyle(0x000000, 0.8).fillRect(0,0,this.scale.width,this.scale.height);
+        gog.lineStyle(4, 0xff0000, 1).strokeRect(8,8,this.scale.width-16,this.scale.height-16);
+        gog.generateTexture('go_overlay', this.scale.width, this.scale.height); gog.destroy();
+        this.add.image(0, 0, 'go_overlay').setOrigin(0).setDepth(299).setScrollFactor(0);
+
+        this.add.text(this.scale.width/2, this.scale.height/2, 'MT RUIM LIXO!', {
+            fontFamily: '"Press Start 2P"', fontSize: '14px', fill: '#ff8888'
+        }).setOrigin(0.5).setDepth(300).setScrollFactor(0);
+        this.add.text(this.scale.width/2, this.scale.height/2 + 36, 'SCORE: ' + score, {
+            fontFamily: '"Press Start 2P"', fontSize: '12px', fill: '#ffff00'
+        }).setOrigin(0.5).setDepth(300).setScrollFactor(0);
+        this.time.delayedCall(2500, () => {
+            if (this.bgMusic && this.bgMusic.isPlaying) this.bgMusic.stop();
+            this.scene.start('MenuScene');
+        });
+    } else {
+        isInvulnerable = true; player.setAlpha(0.4);
+        // Respawn em posição aleatória segura no mapa
+        const WW = this.physics.world.bounds.width;
+        const WH = this.physics.world.bounds.height;
+        player.setPosition(
+            Phaser.Math.Between(80, WW - 80),
+            Phaser.Math.Between(80, WH - 80)
+        );
+        this.time.delayedCall(1500, () => { isInvulnerable = false; player.setAlpha(1); });
+    }
+}
+
+function spawnEnemy() {
+    if (enemies.countActive(true) >= 35) return;
+    const WW = this.physics.world.bounds.width;
+    const WH = this.physics.world.bounds.height;
+    let x = Phaser.Math.Between(160, WW-160);
+    let y = Phaser.Math.Between(160, WH-160);
+
+    // Sorteia tipo de inimigo com base no score
+    const roll = Math.random();
+    let texture, level, enemyType;
+
+    if (score > 120 && roll < 0.20) {
+        // Sniper (20% de chance após 200pts)
+        texture = 'tank_sniper'; level = 2; enemyType = 'sniper';
+    } else if (score > 100 && roll < 0.45) {
+        // Kamikaze (25% de chance após 100pts — roll entre 0.20 e 0.45)
+        texture = 'tank_kamikaze'; level = 1; enemyType = 'kamikaze';
+    } else if (score > 300) {
+        texture = 'tank_e3'; level = 3; enemyType = 'normal';
+    } else if (score > 100) {
+        texture = 'tank_e2'; level = 2; enemyType = 'normal';
+    } else {
+        texture = 'tank_e1'; level = 1; enemyType = 'normal';
+    }
+
+    const enemy = enemies.create(x, y, texture);
+    enemy.eliteLevel  = level;
+    enemy.enemyType   = enemyType;
+    enemy.setBounce(0.5).setCollideWorldBounds(true);
+
+    // Kamikaze não tem corpo de física tão grande (mais ágil)
+    if (enemyType === 'kamikaze') enemy.setScale(0.85);
+    // Sniper fica levemente maior
+    if (enemyType === 'sniper') enemy.setScale(1.1);
+}
+
+// ── Config Phaser com pixelArt ativo ─────────────────────────────────────────
+const config = {
+    type: Phaser.AUTO,
+    width: Math.max(window.innerWidth, window.innerHeight),
+    height: Math.min(window.innerWidth, window.innerHeight),
+    backgroundColor: '#050d05',
+    render: {
+        pixelArt: true,
+        antialias: false,
+        antialiasGL: false
+    },
+    scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.CENTER_BOTH },
+    physics: { default: 'arcade', arcade: { gravity: { y: 0 } } },
+    scene: [BootScene, GameLoadScene, MenuScene, SoundScene, GameScene]
+};
+
+const game = new Phaser.Game(config);
+</script>
+</body>
+</html>
